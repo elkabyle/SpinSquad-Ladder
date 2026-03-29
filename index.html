@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏓 SpinSquad Ladder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #222222;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.15);
+    --text: #f0ede8;
+    --muted: #888;
+    --accent: #c8f060;
+    --accent-dark: #9abf3a;
+    --danger: #ff6b6b;
+    --warning: #f0a060;
+    --gold: #f0c060;
+    --silver: #c0c8d0;
+    --bronze: #c08040;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 0%, rgba(200,240,96,0.06) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 100%, rgba(200,240,96,0.04) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app { max-width: 560px; margin: 0 auto; padding: 0 1rem 5rem; position: relative; z-index: 1; }
+
+  /* Header */
+  .top-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1.25rem 0 0.5rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.25rem;
+  }
+  .logo { font-family: 'DM Serif Display', serif; font-size: 22px; color: var(--text); }
+  .logo span { color: var(--accent); }
+  .player-select-wrap { display: flex; align-items: center; gap: 8px; }
+  .player-select-wrap label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  select {
+    background: var(--surface2); border: 1px solid var(--border2); color: var(--text);
+    border-radius: var(--radius-sm); padding: 6px 10px; font-family: 'DM Sans', sans-serif;
+    font-size: 13px; cursor: pointer; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center; padding-right: 26px;
+  }
+  select:focus { outline: none; border-color: var(--accent); }
+
+  /* Tabs */
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface); border-radius: 10px;
+    padding: 3px; margin-bottom: 1.25rem; border: 1px solid var(--border);
+  }
+  .tab {
+    flex: 1; padding: 8px 4px; text-align: center; font-size: 13px; font-weight: 500;
+    border-radius: 8px; cursor: pointer; border: none; background: transparent;
+    color: var(--muted); transition: all 0.18s;
+  }
+  .tab.active { background: var(--surface2); color: var(--text); border: 1px solid var(--border2); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  /* Ladder */
+  .ladder-list { display: flex; flex-direction: column; gap: 6px; }
+
+  .player-card {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px;
+    transition: all 0.18s; position: relative; overflow: hidden;
+  }
+  .player-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; border-radius: 3px 0 0 3px;
+    background: transparent; transition: background 0.18s;
+  }
+  .player-card.is-you { border-color: rgba(200,240,96,0.35); background: rgba(200,240,96,0.04); }
+  .player-card.is-you::before { background: var(--accent); }
+  .player-card.has-challenge { border-color: rgba(240,160,96,0.4); background: rgba(240,160,96,0.04); }
+  .player-card.has-challenge::before { background: var(--warning); }
+  .player-card.top3 { border-color: rgba(240,192,96,0.3); }
+
+  .rank-num {
+    font-family: 'DM Serif Display', serif; font-size: 20px;
+    width: 28px; text-align: center; flex-shrink: 0;
+    color: var(--muted);
+  }
+  .rank-num.r1 { color: var(--gold); }
+  .rank-num.r2 { color: var(--silver); }
+  .rank-num.r3 { color: var(--bronze); }
+
+  .avatar {
+    width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600; letter-spacing: -0.02em;
+  }
+  .player-meta { flex: 1; min-width: 0; }
+  .player-name {
+    font-size: 15px; font-weight: 500; color: var(--text);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .you-badge {
+    font-size: 9px; background: var(--accent); color: #0f0f0f;
+    padding: 2px 6px; border-radius: 20px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .challenge-badge {
+    font-size: 9px; background: var(--warning); color: #1a0a00;
+    padding: 2px 6px; border-radius: 20px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .player-stats { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .action-area { flex-shrink: 0; }
+  .btn {
+    padding: 6px 12px; border-radius: var(--radius-sm); font-family: 'DM Sans', sans-serif;
+    font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border2);
+    background: transparent; color: var(--text); transition: all 0.15s; white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface2); border-color: var(--border2); }
+  .btn:active { transform: scale(0.97); }
+  .btn-accent { background: var(--accent); color: #0f0f0f; border-color: var(--accent); }
+  .btn-accent:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+  .btn-sm { padding: 4px 9px; font-size: 11px; }
+  .btn-danger { border-color: rgba(255,107,107,0.4); color: var(--danger); }
+  .btn-danger:hover { background: rgba(255,107,107,0.1); }
+  .btn-muted { color: var(--muted); font-size: 11px; border-color: var(--border); cursor: default; }
+  .btn-muted:hover { background: transparent; }
+  .btn-pending { border-color: rgba(240,160,96,0.4); color: var(--warning); font-size: 11px; }
+
+  /* Challenges tab */
+  .challenge-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px; margin-bottom: 8px;
+  }
+  .challenge-card .ch-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+  .challenge-card .ch-title span { color: var(--accent); }
+  .ch-meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .deadline-pill {
+    display: inline-block; font-size: 11px; font-weight: 500;
+    padding: 3px 10px; border-radius: 20px; margin-bottom: 10px;
+  }
+  .deadline-pill.urgent { background: rgba(255,107,107,0.15); color: var(--danger); border: 1px solid rgba(255,107,107,0.3); }
+  .deadline-pill.soon { background: rgba(240,160,96,0.15); color: var(--warning); border: 1px solid rgba(240,160,96,0.3); }
+  .deadline-pill.ok { background: rgba(200,240,96,0.1); color: var(--accent); border: 1px solid rgba(200,240,96,0.25); }
+  .deadline-pill.expired { background: rgba(255,107,107,0.2); color: var(--danger); border: 1px solid rgba(255,107,107,0.4); }
+
+  .result-btns { display: flex; gap: 8px; }
+  .btn-win { border-color: rgba(200,240,96,0.4); color: var(--accent); }
+  .btn-win:hover { background: rgba(200,240,96,0.1); }
+  .btn-lose { border-color: rgba(255,107,107,0.4); color: var(--danger); }
+  .btn-lose:hover { background: rgba(255,107,107,0.1); }
+
+  .section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin: 1.25rem 0 0.6rem;
+  }
+
+  .rules-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; font-size: 13px; color: var(--muted); line-height: 1.8;
+  }
+  .rules-box li { list-style: none; padding-left: 16px; position: relative; }
+  .rules-box li::before { content: '—'; position: absolute; left: 0; color: var(--accent); }
+
+  /* History */
+  .history-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 6px; font-size: 13px;
+  }
+  .hist-icon { font-size: 16px; flex-shrink: 0; }
+  .hist-text { flex: 1; }
+  .hist-text strong { color: var(--text); }
+  .hist-date { font-size: 11px; color: var(--muted); }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 1rem; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+  .stat-val { font-family: 'DM Serif Display', serif; font-size: 28px; color: var(--text); }
+  .stat-val.accent { color: var(--accent); }
+  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .profile-header {
+    display: flex; align-items: center; gap: 14px; padding: 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1rem;
+  }
+  .profile-avatar {
+    width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 20px; font-weight: 600;
+  }
+  .profile-name { font-family: 'DM Serif Display', serif; font-size: 22px; }
+  .profile-rank { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .winrate-bar {
+    height: 6px; background: var(--surface2); border-radius: 3px; margin-top: 4px; overflow: hidden;
+  }
+  .winrate-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.6s; }
+
+  /* Modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    z-index: 100; align-items: center; justify-content: center; padding: 1rem;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border2); border-radius: 16px;
+    padding: 1.5rem; width: 100%; max-width: 380px;
+    animation: slideUp 0.2s ease;
+  }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .modal h2 { font-family: 'DM Serif Display', serif; font-size: 22px; margin-bottom: 6px; }
+  .modal p { font-size: 13px; color: var(--muted); margin-bottom: 1rem; line-height: 1.6; }
+  .modal-select { width: 100%; margin-bottom: 1rem; font-size: 14px; padding: 10px 12px; }
+  .modal-btns { display: flex; gap: 8px; }
+  .modal-btns .btn { flex: 1; padding: 10px; text-align: center; font-size: 14px; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--surface2); border: 1px solid var(--border2); border-radius: 30px;
+    padding: 10px 20px; font-size: 13px; color: var(--text);
+    opacity: 0; transition: all 0.3s; z-index: 200; white-space: nowrap; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* Nav */
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 560px;
+    background: rgba(15,15,15,0.95); border-top: 1px solid var(--border);
+    display: flex; backdrop-filter: blur(12px); z-index: 50;
+  }
+  .nav-item {
+    flex: 1; padding: 10px 4px 14px; text-align: center; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    color: var(--muted); transition: color 0.15s; border: none; background: transparent;
+  }
+  .nav-item.active { color: var(--accent); }
+  .nav-icon { font-size: 20px; line-height: 1; }
+  .nav-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* Loading */
+  .loading {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 3rem; color: var(--muted); font-size: 14px; gap: 12px;
+  }
+  .spinner {
+    width: 28px; height: 28px; border: 2px solid var(--border2);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state {
+    text-align: center; padding: 2.5rem 1rem; color: var(--muted); font-size: 14px;
+  }
+  .empty-state .empty-icon { font-size: 36px; margin-bottom: 8px; }
+
+  /* Fade in */
+  .fade-in { animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Diff badge */
+  .diff { font-size: 11px; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
+  .diff.up { background: rgba(200,240,96,0.15); color: var(--accent); }
+  .diff.down { background: rgba(255,107,107,0.15); color: var(--danger); }
+
+  @media (max-width: 400px) {
+    .player-name { font-size: 14px; }
+    .avatar { width: 34px; height: 34px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top-bar">
+    <div class="logo">SpinSquad <span>Ladder</span></div>
+    <div class="player-select-wrap">
+      <label>Playing as</label>
+      <select id="currentPlayerSelect" onchange="onPlayerChange()">
+        <option value="">— pick you —</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('ladder')">🏓 Ladder</button>
+    <button class="tab" onclick="showTab('challenges')">⚔️ Challenges</button>
+    <button class="tab" onclick="showTab('stats')">📊 Stats</button>
+    <button class="tab" onclick="showTab('history')">📋 History</button>
+  </div>
+
+  <div id="tab-ladder" class="fade-in"></div>
+  <div id="tab-challenges" style="display:none" class="fade-in"></div>
+  <div id="tab-stats" style="display:none" class="fade-in"></div>
+  <div id="tab-history" style="display:none" class="fade-in"></div>
+</div>
+
+<!-- Challenge modal -->
+<div class="modal-overlay" id="challengeModal">
+  <div class="modal">
+    <h2>Issue a Challenge</h2>
+    <p id="challengeModalDesc">You can challenge the 2 players ranked directly above you.</p>
+    <select class="modal-select" id="challengeTarget"></select>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal('challengeModal')">Cancel</button>
+      <button class="btn btn-accent" onclick="submitChallenge()">Challenge ↗</button>
+    </div>
+  </div>
+</div>
+
+<!-- Result modal -->
+<div class="modal-overlay" id="resultModal">
+  <div class="modal">
+    <h2>Record Result</h2>
+    <p id="resultModalDesc"></p>
+    <div class="modal-btns">
+      <button class="btn btn-win" id="resultWinBtn" onclick="submitResult('challenger')">Challenger won</button>
+      <button class="btn btn-lose" id="resultLoseBtn" onclick="submitResult('challenged')">Challenged won</button>
+    </div>
+    <div style="margin-top:10px;">
+      <button class="btn" style="width:100%;justify-content:center;" onclick="closeModal('resultModal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  CONFIG — replace with your Google Apps Script web app URL
+// ============================================================
+const API_URL = 'https://script.google.com/macros/s/AKfycbwg0xswunMLk4BmTUIcQBzL2NBjVDDFUQ3OJJxt2LljFL7w4vgAdx9OElgffuRi4-o9wg/exec';
+
+// ============================================================
+//  DEMO DATA — used when API_URL is not configured
+// ============================================================
+const DEMO_PLAYERS = [
+  { id: 'p1', name: 'Alex', rank: 1, wins: 12, losses: 2, avatarColor: '#1D9E75', initials: 'AL' },
+  { id: 'p2', name: 'Jordan', rank: 2, wins: 10, losses: 3, avatarColor: '#534AB7', initials: 'JO' },
+  { id: 'p3', name: 'Casey', rank: 3, wins: 9, losses: 4, avatarColor: '#D85A30', initials: 'CA' },
+  { id: 'p4', name: 'Riley', rank: 4, wins: 7, losses: 5, avatarColor: '#D4537E', initials: 'RI' },
+  { id: 'p5', name: 'Morgan', rank: 5, wins: 6, losses: 5, avatarColor: '#185FA5', initials: 'MO' },
+  { id: 'p6', name: 'Sam', rank: 6, wins: 5, losses: 6, avatarColor: '#639922', initials: 'SA' },
+  { id: 'p7', name: 'Taylor', rank: 7, wins: 4, losses: 7, avatarColor: '#BA7517', initials: 'TA' },
+  { id: 'p8', name: 'Drew', rank: 8, wins: 3, losses: 8, avatarColor: '#5F5E5A', initials: 'DR' },
+  { id: 'p9', name: 'Jamie', rank: 9, wins: 2, losses: 9, avatarColor: '#993556', initials: 'JA' },
+  { id: 'p10', name: 'Quinn', rank: 10, wins: 1, losses: 10, avatarColor: '#3C3489', initials: 'QU' },
+];
+
+const DEMO_CHALLENGES = [
+  { id: 'c1', challengerId: 'p5', challengedId: 'p4', challengerName: 'Morgan', challengedName: 'Riley', date: daysAgo(3), status: 'active' },
+  { id: 'c2', challengerId: 'p6', challengedId: 'p5', challengerName: 'Sam', challengedName: 'Morgan', date: daysAgo(9), status: 'active' },
+];
+
+const DEMO_HISTORY = [
+  { date: daysAgo(5), type: 'result', text: 'Casey beat Taylor', rankChange: 'Casey +2, Taylor −2' },
+  { date: daysAgo(8), type: 'result', text: 'Alex defended against Jordan', rankChange: 'No change' },
+  { date: daysAgo(12), type: 'forfeit', text: 'Drew forfeited vs Sam', rankChange: 'Sam +2, Drew −2' },
+  { date: daysAgo(18), type: 'result', text: 'Riley beat Morgan', rankChange: 'Riley +2, Morgan −2' },
+];
+
+function daysAgo(n) {
+  const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString();
+}
+
+// ============================================================
+//  STATE
+// ============================================================
+let state = { players: [], challenges: [], history: [], currentPlayerId: '' };
+let activeTab = 'ladder';
+let pendingChallenge = null;
+
+// ============================================================
+//  INIT
+// ============================================================
+async function init() {
+  await loadData();
+  renderPlayerSelect();
+  renderCurrentTab();
+}
+
+async function loadData() {
+  if (!API_URL || API_URL === 'YOUR_APPS_SCRIPT_URL_HERE') {
+    state.players = JSON.parse(JSON.stringify(DEMO_PLAYERS));
+    state.challenges = JSON.parse(JSON.stringify(DEMO_CHALLENGES));
+    state.history = JSON.parse(JSON.stringify(DEMO_HISTORY));
+    return;
+  }
+  try {
+    showLoading();
+    const r = await fetch(API_URL + '?action=getData');
+    const d = await r.json();
+    state.players = d.players || [];
+    state.challenges = d.challenges || [];
+    state.history = d.history || [];
+  } catch(e) {
+    showToast('⚠️ Could not load data, showing demo');
+    state.players = DEMO_PLAYERS;
+    state.challenges = DEMO_CHALLENGES;
+    state.history = DEMO_HISTORY;
+  }
+}
+
+async function apiCall(action, payload) {
+  if (!API_URL || API_URL === 'YOUR_APPS_SCRIPT_URL_HERE') {
+    // Demo mode — simulate locally
+    simulateAction(action, payload);
+    return { ok: true };
+  }
+  const r = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...payload })
+  });
+  return r.json();
+}
+
+// Demo simulation
+function simulateAction(action, payload) {
+  if (action === 'challenge') {
+    const challenger = state.players.find(p => p.id === payload.challengerId);
+    const challenged = state.players.find(p => p.id === payload.challengedId);
+    state.challenges.push({
+      id: 'c' + Date.now(), challengerId: payload.challengerId, challengedId: payload.challengedId,
+      challengerName: challenger.name, challengedName: challenged.name,
+      date: new Date().toISOString(), status: 'active'
+    });
+  }
+  if (action === 'result') {
+    const ch = state.challenges.find(c => c.id === payload.challengeId);
+    if (!ch) return;
+    ch.status = 'done';
+    const challenger = state.players.find(p => p.id === ch.challengerId);
+    const challenged = state.players.find(p => p.id === ch.challengedId);
+    if (payload.winner === 'challenger') {
+      state.history.unshift({ date: new Date().toISOString(), type: 'result',
+        text: `${challenger.name} beat ${challenged.name}`, rankChange: `${challenger.name} +2, ${challenged.name} −2` });
+      challenger.wins = (challenger.wins || 0) + 1;
+      challenged.losses = (challenged.losses || 0) + 1;
+      // swap ranks
+      const cr = challenger.rank, cd = challenged.rank;
+      challenger.rank = Math.max(1, cr - 2);
+      challenged.rank = cd + 2;
+    } else {
+      state.history.unshift({ date: new Date().toISOString(), type: 'result',
+        text: `${challenged.name} defended vs ${challenger.name}`, rankChange: 'No change' });
+      challenged.wins = (challenged.wins || 0) + 1;
+      challenger.losses = (challenger.losses || 0) + 1;
+    }
+    state.players.sort((a, b) => a.rank - b.rank);
+    state.challenges = state.challenges.filter(c => c.status !== 'done');
+  }
+}
+
+// ============================================================
+//  UI HELPERS
+// ============================================================
+function showTab(name) {
+  activeTab = name;
+  ['ladder','challenges','stats','history'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    el.style.display = t === name ? 'block' : 'none';
+    if (t === name) { el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
+  });
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', ['ladder','challenges','stats','history'][i] === name);
+  });
+  renderCurrentTab();
+}
+
+function renderCurrentTab() {
+  if (activeTab === 'ladder') renderLadder();
+  if (activeTab === 'challenges') renderChallenges();
+  if (activeTab === 'stats') renderStats();
+  if (activeTab === 'history') renderHistory();
+}
+
+function showLoading() {
+  document.getElementById('tab-' + activeTab).innerHTML =
+    '<div class="loading"><div class="spinner"></div><span>Loading…</span></div>';
+}
+
+function showToast(msg, dur = 2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function onPlayerChange() {
+  state.currentPlayerId = document.getElementById('currentPlayerSelect').value;
+  renderCurrentTab();
+}
+
+function renderPlayerSelect() {
+  const sel = document.getElementById('currentPlayerSelect');
+  const cur = state.currentPlayerId;
+  sel.innerHTML = '<option value="">— pick you —</option>' +
+    state.players.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${p.name}</option>`).join('');
+}
+
+// ============================================================
+//  LADDER
+// ============================================================
+function renderLadder() {
+  const me = state.players.find(p => p.id === state.currentPlayerId);
+  const sorted = [...state.players].sort((a, b) => a.rank - b.rank);
+  const activeChIds = new Set(state.challenges.filter(c => c.status === 'active').map(c => c.challengedId));
+  const meHasChallenge = me && state.challenges.some(c => c.status === 'active' && c.challengerId === me.id);
+
+  const html = sorted.map(p => {
+    const isMe = p.id === state.currentPlayerId;
+    const isTarget = me && !isMe && (p.rank === me.rank - 1 || p.rank === me.rank - 2);
+    const isChallenged = activeChIds.has(p.id);
+
+    let actionHtml = '';
+    if (!state.currentPlayerId) {
+      actionHtml = `<button class="btn btn-muted btn-sm">select player</button>`;
+    } else if (isMe) {
+      actionHtml = '';
+    } else if (isChallenged) {
+      actionHtml = `<button class="btn btn-pending btn-sm">⏳ pending</button>`;
+    } else if (isTarget && !meHasChallenge) {
+      actionHtml = `<button class="btn btn-accent btn-sm" onclick="openChallengeModal('${p.id}')">Challenge</button>`;
+    } else if (isTarget && meHasChallenge) {
+      actionHtml = `<button class="btn btn-muted btn-sm">in play</button>`;
+    } else if (p.rank >= me?.rank) {
+      actionHtml = '';
+    } else {
+      actionHtml = `<button class="btn btn-muted btn-sm">out of range</button>`;
+    }
+
+    const rnk = p.rank <= 3 ? `r${p.rank}` : '';
+    const medal = p.rank === 1 ? ' 🥇' : p.rank === 2 ? ' 🥈' : p.rank === 3 ? ' 🥉' : '';
+    const winrate = p.wins + p.losses > 0 ? Math.round(100 * p.wins / (p.wins + p.losses)) : 0;
+
+    return `<div class="player-card ${isMe ? 'is-you' : ''} ${isChallenged ? 'has-challenge' : ''} ${p.rank <= 3 ? 'top3' : ''}">
+      <div class="rank-num ${rnk}">${p.rank}${medal}</div>
+      <div class="avatar" style="background:${p.avatarColor}22;color:${p.avatarColor}">${p.initials}</div>
+      <div class="player-meta">
+        <div class="player-name">
+          ${p.name}
+          ${isMe ? '<span class="you-badge">you</span>' : ''}
+          ${isChallenged ? '<span class="challenge-badge">challenged</span>' : ''}
+        </div>
+        <div class="player-stats">${p.wins}W · ${p.losses}L · ${winrate}% win rate</div>
+      </div>
+      <div class="action-area">${actionHtml}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('tab-ladder').innerHTML = `<div class="ladder-list">${html}</div>`;
+}
+
+// ============================================================
+//  CHALLENGES
+// ============================================================
+function renderChallenges() {
+  const active = state.challenges.filter(c => c.status === 'active');
+  const me = state.players.find(p => p.id === state.currentPlayerId);
+
+  let html = '';
+
+  if (active.length === 0) {
+    html += '<div class="empty-state"><div class="empty-icon">⚔️</div><p>No active challenges right now.</p></div>';
+  } else {
+    html += '<div class="section-label">Active challenges</div>';
+    active.forEach(ch => {
+      const days = daysBetween(ch.date, new Date());
+      const daysLeft = 10 - days;
+      const isMyChallenge = ch.challengerId === state.currentPlayerId || ch.challengedId === state.currentPlayerId;
+      let pill = '', pillClass = '';
+      if (daysLeft <= 0) { pill = 'Expired — auto forfeit applied'; pillClass = 'expired'; }
+      else if (daysLeft <= 2) { pill = `${daysLeft}d left — urgent!`; pillClass = 'urgent'; }
+      else if (daysLeft <= 5) { pill = `${daysLeft} days left`; pillClass = 'soon'; }
+      else { pill = `${daysLeft} days left`; pillClass = 'ok'; }
+
+      const resultBtns = isMyChallenge
+        ? `<div class="result-btns">
+            <button class="btn btn-win" onclick="openResultModal('${ch.id}')">Record result</button>
+           </div>`
+        : '';
+
+      html += `<div class="challenge-card">
+        <div class="ch-title">${ch.challengerName} <span>→</span> ${ch.challengedName}</div>
+        <div class="ch-meta">Issued ${formatDate(ch.date)}</div>
+        <div class="deadline-pill ${pillClass}">${pill}</div>
+        ${resultBtns}
+      </div>`;
+    });
+  }
+
+  html += `<div class="section-label">Rules</div>
+  <div class="rules-box"><ul>
+    <li>You may challenge either of the 2 players ranked directly above you.</li>
+    <li>Challenger wins → moves up 2 ranks, challenged drops 2.</li>
+    <li>Challenger loses → no rank change for either player.</li>
+    <li>No match within 10 days → challenged player auto-forfeits (drops 2 ranks).</li>
+    <li>Only one active challenge at a time per player.</li>
+  </ul></div>`;
+
+  document.getElementById('tab-challenges').innerHTML = html;
+}
+
+// ============================================================
+//  STATS
+// ============================================================
+function renderStats() {
+  const me = state.players.find(p => p.id === state.currentPlayerId);
+  if (!me) {
+    document.getElementById('tab-stats').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">📊</div><p>Select your name above to see your profile.</p></div>';
+    return;
+  }
+  const winrate = me.wins + me.losses > 0 ? Math.round(100 * me.wins / (me.wins + me.losses)) : 0;
+  const myHistory = state.history.filter(h => h.text.includes(me.name));
+
+  document.getElementById('tab-stats').innerHTML = `
+    <div class="profile-header">
+      <div class="profile-avatar" style="background:${me.avatarColor}22;color:${me.avatarColor};width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;">${me.initials}</div>
+      <div>
+        <div class="profile-name">${me.name}</div>
+        <div class="profile-rank">Rank #${me.rank} of ${state.players.length}</div>
+      </div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Rank</div><div class="stat-val accent">#${me.rank}</div><div class="stat-sub">of ${state.players.length} players</div></div>
+      <div class="stat-card"><div class="stat-label">Win rate</div><div class="stat-val">${winrate}%</div><div class="winrate-bar"><div class="winrate-fill" style="width:${winrate}%"></div></div></div>
+      <div class="stat-card"><div class="stat-label">Wins</div><div class="stat-val accent">${me.wins}</div></div>
+      <div class="stat-card"><div class="stat-label">Losses</div><div class="stat-val">${me.losses}</div></div>
+    </div>
+    <div class="section-label">Your recent matches</div>
+    ${myHistory.length === 0
+      ? '<div class="empty-state" style="padding:1.5rem"><p>No matches yet.</p></div>'
+      : myHistory.slice(0, 6).map(h => `
+        <div class="history-row">
+          <div class="hist-icon">${h.type === 'forfeit' ? '⚠️' : '🏓'}</div>
+          <div class="hist-text"><strong>${h.text}</strong><br><span style="font-size:11px;color:var(--muted)">${h.rankChange}</span></div>
+          <div class="hist-date">${formatDate(h.date)}</div>
+        </div>`).join('')}
+  `;
+}
+
+// ============================================================
+//  HISTORY
+// ============================================================
+function renderHistory() {
+  if (state.history.length === 0) {
+    document.getElementById('tab-history').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">📋</div><p>No match history yet.</p></div>';
+    return;
+  }
+  document.getElementById('tab-history').innerHTML =
+    '<div class="section-label">All results</div>' +
+    state.history.map(h => `
+      <div class="history-row">
+        <div class="hist-icon">${h.type === 'forfeit' ? '⚠️' : '🏓'}</div>
+        <div class="hist-text"><strong>${h.text}</strong><br><span style="font-size:11px;color:var(--muted)">${h.rankChange}</span></div>
+        <div class="hist-date">${formatDate(h.date)}</div>
+      </div>`).join('');
+}
+
+// ============================================================
+//  CHALLENGE FLOW
+// ============================================================
+function openChallengeModal(targetId) {
+  if (!state.currentPlayerId) { showToast('Select your name first'); return; }
+  const me = state.players.find(p => p.id === state.currentPlayerId);
+  const eligible = state.players.filter(p => p.rank === me.rank - 1 || p.rank === me.rank - 2);
+  const sel = document.getElementById('challengeTarget');
+  sel.innerHTML = eligible.map(p => `<option value="${p.id}">${p.name} (rank #${p.rank})</option>`).join('');
+  sel.value = targetId;
+  document.getElementById('challengeModalDesc').textContent =
+    `You are rank #${me.rank}. You can challenge ranks #${me.rank - 1} or #${me.rank - 2}.`;
+  openModal('challengeModal');
+}
+
+async function submitChallenge() {
+  const challengedId = document.getElementById('challengeTarget').value;
+  const challenged = state.players.find(p => p.id === challengedId);
+  closeModal('challengeModal');
+  showToast('⏳ Sending challenge…');
+  await apiCall('challenge', { challengerId: state.currentPlayerId, challengedId });
+  showToast(`✅ Challenge sent to ${challenged.name}!`);
+  renderCurrentTab();
+}
+
+// ============================================================
+//  RESULT FLOW
+// ============================================================
+let activeResultChallengeId = null;
+
+function openResultModal(challengeId) {
+  activeResultChallengeId = challengeId;
+  const ch = state.challenges.find(c => c.id === challengeId);
+  document.getElementById('resultModalDesc').textContent =
+    `${ch.challengerName} challenged ${ch.challengedName}. Who won?`;
+  openModal('resultModal');
+}
+
+async function submitResult(winner) {
+  closeModal('resultModal');
+  showToast('⏳ Recording result…');
+  await apiCall('result', { challengeId: activeResultChallengeId, winner });
+  showToast('✅ Result recorded!');
+  renderCurrentTab();
+}
+
+// ============================================================
+//  UTILS
+// ============================================================
+function daysBetween(dateStr, now) {
+  return Math.floor((now - new Date(dateStr)) / 86400000);
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' });
+}
+
+init();
+</script>
+</body>
+</html>
