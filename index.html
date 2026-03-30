@@ -579,7 +579,13 @@ function renderLadder() {
         <div class="player-name">
           ${p.name}
           ${isMe ? '<span class="you-badge">you</span>' : ''}
-          ${isChallenged ? `<span class="challenge-badge">challenged by ${state.challenges.find(c => c.challengedId === p.id)?.challengerName || '?'}</span>` : ''}
+          ${(() => {
+            const asChallenger = state.challenges.find(c => c.challengerId === p.id);
+            const asChallenged = state.challenges.find(c => c.challengedId === p.id);
+            if (asChallenged) return `<span class="challenge-badge">challenged by ${asChallenged.challengerName}</span>`;
+            if (asChallenger) return `<span class="challenge-badge">challenging ${asChallenger.challengedName}</span>`;
+            return '';
+          })()}
         </div>
         <div class="player-stats">${p.wins}W · ${p.losses}L · ${winrate}% win rate</div>
       </div>
