@@ -471,8 +471,9 @@ function simulateAction(action, payload) {
       challenged.losses = (challenged.losses || 0) + 1;
       // swap ranks
       const cr = challenger.rank, cd = challenged.rank;
-      challenger.rank = Math.max(1, cr - 2);
-      challenged.rank = cd + 2;
+      const oldChallengedRank = challenged.rank;
+      challenged.rank = challenged.rank + 1;
+      challenger.rank = oldChallengedRank;
     } else {
       state.history.unshift({ date: new Date().toISOString(), type: 'result',
         text: `${challenged.name} defended vs ${challenger.name}`, rankChange: 'No change' });
@@ -631,7 +632,7 @@ function renderChallenges() {
   html += `<div class="section-label">Rules</div>
   <div class="rules-box"><ul>
     <li>You may challenge either of the 2 players ranked directly above you.</li>
-    <li>Challenger wins → moves up 2 ranks, challenged drops 1.</li>
+    <li>Challenger wins → takes challenged player's exact rank, challenged drops 1.</li>
     <li>Challenger loses → no rank change for either player.</li>
     <li>No match within 10 days → challenged player auto-forfeits (drops 2 ranks).</li>
     <li>Only one active challenge at a time per player.</li>
