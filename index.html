@@ -401,6 +401,11 @@ let pendingChallenge = null;
 async function init() {
   await loadData();
   renderPlayerSelect();
+  const saved = localStorage.getItem('spinsquad_player');
+  if (saved && state.players.find(p => p.id === saved)) {
+    state.currentPlayerId = saved;
+    document.getElementById('currentPlayerSelect').value = saved;
+  }  
   renderCurrentTab();
 }
 
@@ -518,6 +523,7 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 
 function onPlayerChange() {
   state.currentPlayerId = document.getElementById('currentPlayerSelect').value;
+  localStorage.setItem('spinsquad_player', state.currentPlayerId);
   renderCurrentTab();
 }
 
@@ -710,6 +716,7 @@ async function submitChallenge() {
   closeModal('challengeModal');
   showToast('⏳ Sending challenge…');
   await apiCall('challenge', { challengerId: state.currentPlayerId, challengedId });
+  await loadData();
   showToast(`✅ Challenge sent to ${challenged.name}!`);
   renderCurrentTab();
 }
@@ -731,6 +738,7 @@ async function submitResult(winner) {
   closeModal('resultModal');
   showToast('⏳ Recording result…');
   await apiCall('result', { challengeId: activeResultChallengeId, winner });
+  await loadData();
   showToast('✅ Result recorded!');
   renderCurrentTab();
 }
