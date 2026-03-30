@@ -470,7 +470,6 @@ function simulateAction(action, payload) {
       challenger.wins = (challenger.wins || 0) + 1;
       challenged.losses = (challenged.losses || 0) + 1;
       // swap ranks
-      const cr = challenger.rank, cd = challenged.rank;
       const oldChallengedRank = challenged.rank;
       challenged.rank = challenged.rank + 1;
       challenger.rank = oldChallengedRank;
@@ -541,7 +540,7 @@ function renderPlayerSelect() {
 function renderLadder() {
   const me = state.players.find(p => p.id === state.currentPlayerId);
   const sorted = [...state.players].sort((a, b) => a.rank - b.rank);
-  const activeChIds = new Set(state.challenges.filter(c => c.status === 'active').map(c => c.challengedId));
+  const activeChIds = new Set(state.challenges.filter(c => c.status === 'active').flatMap(c => [c.challengedId, c.challengerId]));
   const meHasChallenge = me && state.challenges.some(c => c.challengerId === me.id || c.challengedId === me.id);
 
   const html = sorted.map(p => {
@@ -634,7 +633,7 @@ function renderChallenges() {
     <li>You may challenge either of the 2 players ranked directly above you.</li>
     <li>Challenger wins → takes challenged player's exact rank, challenged drops 1.</li>
     <li>Challenger loses → no rank change for either player.</li>
-    <li>No match within 10 days → challenged player auto-forfeits (drops 2 ranks).</li>
+    <li>No match within 10 days → challenged player auto-forfeits (drops 1 ranks).</li>
     <li>Only one active challenge at a time per player.</li>
   </ul></div>`;
 
