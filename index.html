@@ -432,11 +432,8 @@ async function apiCall(action, payload) {
     simulateAction(action, payload);
     return { ok: true };
   }
-  const r = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...payload })
-  });
+  const params = new URLSearchParams({ action, ...payload });
+  const r = await fetch(API_URL + '?' + params);
   return r.json();
 }
 
