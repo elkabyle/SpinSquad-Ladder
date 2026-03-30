@@ -360,28 +360,16 @@ const API_URL = 'YOUR_APPS_SCRIPT_URL_HERE';
 //  DEMO DATA — used when API_URL is not configured
 // ============================================================
 const DEMO_PLAYERS = [
-  { id: 'p1', name: 'Alex', rank: 1, wins: 12, losses: 2, avatarColor: '#1D9E75', initials: 'AL' },
-  { id: 'p2', name: 'Jordan', rank: 2, wins: 10, losses: 3, avatarColor: '#534AB7', initials: 'JO' },
-  { id: 'p3', name: 'Casey', rank: 3, wins: 9, losses: 4, avatarColor: '#D85A30', initials: 'CA' },
-  { id: 'p4', name: 'Riley', rank: 4, wins: 7, losses: 5, avatarColor: '#D4537E', initials: 'RI' },
-  { id: 'p5', name: 'Morgan', rank: 5, wins: 6, losses: 5, avatarColor: '#185FA5', initials: 'MO' },
-  { id: 'p6', name: 'Sam', rank: 6, wins: 5, losses: 6, avatarColor: '#639922', initials: 'SA' },
-  { id: 'p7', name: 'Taylor', rank: 7, wins: 4, losses: 7, avatarColor: '#BA7517', initials: 'TA' },
-  { id: 'p8', name: 'Drew', rank: 8, wins: 3, losses: 8, avatarColor: '#5F5E5A', initials: 'DR' },
-  { id: 'p9', name: 'Jamie', rank: 9, wins: 2, losses: 9, avatarColor: '#993556', initials: 'JA' },
-  { id: 'p10', name: 'Quinn', rank: 10, wins: 1, losses: 10, avatarColor: '#3C3489', initials: 'QU' },
+  { id: 'p1', name: 'Martin', rank: 1, wins: 0, losses: 0, avatarColor: '#1D9E75', initials: 'MA' },
+  { id: 'p2', name: 'PlayerX', rank: 2, wins: 0, losses: 0, avatarColor: '#534AB7', initials: 'XX' },
+  { id: 'p3', name: 'PlayerY', rank: 3, wins: 0, losses: 0, avatarColor: '#D85A30', initials: 'YY' },
+  { id: 'p4', name: 'Mohand', rank: 4, wins: 0, losses: 0, avatarColor: '#D4537E', initials: 'MO' },
 ];
 
 const DEMO_CHALLENGES = [
-  { id: 'c1', challengerId: 'p5', challengedId: 'p4', challengerName: 'Morgan', challengedName: 'Riley', date: daysAgo(3), status: 'active' },
-  { id: 'c2', challengerId: 'p6', challengedId: 'p5', challengerName: 'Sam', challengedName: 'Morgan', date: daysAgo(9), status: 'active' },
 ];
 
 const DEMO_HISTORY = [
-  { date: daysAgo(5), type: 'result', text: 'Casey beat Taylor', rankChange: 'Casey +2, Taylor −2' },
-  { date: daysAgo(8), type: 'result', text: 'Alex defended against Jordan', rankChange: 'No change' },
-  { date: daysAgo(12), type: 'forfeit', text: 'Drew forfeited vs Sam', rankChange: 'Sam +2, Drew −2' },
-  { date: daysAgo(18), type: 'result', text: 'Riley beat Morgan', rankChange: 'Riley +2, Morgan −2' },
 ];
 
 function daysAgo(n) {
