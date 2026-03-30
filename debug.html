@@ -465,7 +465,7 @@ function simulateAction(action, payload) {
       // swap ranks
       const cr = challenger.rank, cd = challenged.rank;
       challenger.rank = Math.max(1, cr - 2);
-      challenged.rank = cd + 2;
+      challenged.rank = cd + 1;
     } else {
       state.history.unshift({ date: new Date().toISOString(), type: 'result',
         text: `${challenged.name} defended vs ${challenger.name}`, rankChange: 'No change' });
