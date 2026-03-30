@@ -442,10 +442,15 @@ async function apiCall(action, payload) {
 
 // Demo simulation
 function simulateAction(action, payload) {
+
   if (action === 'challenge') {
-    const challenger = state.players.find(p => p.id === payload.challengerId);
-    const challenged = state.players.find(p => p.id === payload.challengedId);
-    state.challenges.push({
+      const alreadyInGame = state.challenges.some(c =>
+        c.challengerId === payload.challengerId || c.challengedId === payload.challengerId
+      );
+      if (alreadyInGame) return;
+      const challenger = state.players.find(p => p.id === payload.challengerId);
+      const challenged = state.players.find(p => p.id === payload.challengedId);
+      state.challenges.push({
       id: 'c' + Date.now(), challengerId: payload.challengerId, challengedId: payload.challengedId,
       challengerName: challenger.name, challengedName: challenged.name,
       date: new Date().toISOString(), status: 'active'
@@ -533,7 +538,7 @@ function renderLadder() {
   const me = state.players.find(p => p.id === state.currentPlayerId);
   const sorted = [...state.players].sort((a, b) => a.rank - b.rank);
   const activeChIds = new Set(state.challenges.filter(c => c.status === 'active').map(c => c.challengedId));
-  const meHasChallenge = me && state.challenges.some(c => c.status === 'active' && c.challengerId === me.id);
+  const meHasChallenge = me && state.challenges.some(c => c.challengerId === me.id || c.challengedId === me.id);
 
   const html = sorted.map(p => {
     const isMe = p.id === state.currentPlayerId;
@@ -568,7 +573,7 @@ function renderLadder() {
         <div class="player-name">
           ${p.name}
           ${isMe ? '<span class="you-badge">you</span>' : ''}
-          ${isChallenged ? '<span class="challenge-badge">challenged</span>' : ''}
+          ${isChallenged ? `<span class="challenge-badge">challenged by ${state.challenges.find(c => c.challengedId === p.id)?.challengerName || '?'}</span>` : ''}
         </div>
         <div class="player-stats">${p.wins}W · ${p.losses}L · ${winrate}% win rate</div>
       </div>
