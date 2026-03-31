@@ -710,9 +710,20 @@ function renderHistory() {
 function openChallengeModal(targetId) {
   if (!state.currentPlayerId) { showToast('Select your name first'); return; }
   const me = state.players.find(p => p.id === state.currentPlayerId);
-  const eligible = state.players.filter(p => p.rank === me.rank - 1 || p.rank === me.rank - 2);
+  const eligible = state.players.filter(p => {
+    if (p.rank !== me.rank - 1 && p.rank !== me.rank - 2) return false;
+    const inChallenge = state.challenges.some(c => c.challengerId === p.id || c.challengedId === p.id);
+    return !inChallenge;
+  });
   const sel = document.getElementById('challengeTarget');
+
+  if (eligible.length === 0) {
+    closeModal('challengeModal');
+    showToast('⚠️ Both players above you are already in a challenge.');
+    return;
+  }
   sel.innerHTML = eligible.map(p => `<option value="${p.id}">${p.name} (rank #${p.rank})</option>`).join('');
+
   sel.value = targetId;
   document.getElementById('challengeModalDesc').textContent =
     `You are rank #${me.rank}. You can challenge ranks #${me.rank - 1} or #${me.rank - 2}.`;
