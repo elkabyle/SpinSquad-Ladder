@@ -554,12 +554,19 @@ function renderLadder() {
     } else if (isMe) {
       actionHtml = '';
     } else if (isChallenged) {
-      actionHtml = `<button class="btn btn-pending btn-sm">⏳ pending</button>`;
+      const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
+      const dLeft = ch ? 10 - daysBetween(ch.date, new Date()) : '?';
+      const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
+      actionHtml = `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
     } else if (isTarget && !meHasChallenge) {
-      const targetInChallenge = state.challenges.some(c => c.challengerId === p.id || c.challengedId === p.id);
-      actionHtml = targetInChallenge
-        ? `<button class="btn btn-pending btn-sm">⏳ pending</button>`
-        : `<button class="btn btn-accent btn-sm" onclick="openChallengeModal('${p.id}')">Challenge</button>`;
+      const targetInChallenge = state.challenges.find(c => c.challengerId === p.id || c.challengedId === p.id);
+      if (targetInChallenge) {
+        const dLeft = 10 - daysBetween(targetInChallenge.date, new Date());
+        const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
+        actionHtml = `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
+      } else {
+        actionHtml = `<button class="btn btn-accent btn-sm" onclick="openChallengeModal('${p.id}')">Challenge</button>`;
+      }
     } else if (isTarget && meHasChallenge) {
       actionHtml = `<button class="btn btn-muted btn-sm">in play</button>`;
     } else if (p.rank >= me?.rank) {
