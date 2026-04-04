@@ -348,6 +348,19 @@
   </div>
 </div>
 
+<!-- Cancel challenge modal -->
+<div class="modal-overlay" id="cancelModal">
+  <div class="modal">
+    <h2>Cancel Challenge</h2>
+    <p id="cancelModalDesc"></p>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal('cancelModal')">No, keep it</button>
+      <button class="btn btn-danger" onclick="submitCancel()">Yes, cancel it</button>
+    </div>
+  </div>
+</div>
+
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -481,6 +494,9 @@ function simulateAction(action, payload) {
     }
     state.players.sort((a, b) => a.rank - b.rank);
     state.challenges = state.challenges.filter(c => c.status !== 'done');
+  }
+  if (action === 'cancel') {
+    state.challenges = state.challenges.filter(c => c.id !== payload.challengeId);
   }
 }
 
@@ -635,6 +651,7 @@ function renderChallenges() {
       const resultBtns = isMyChallenge
         ? `<div class="result-btns">
             <button class="btn btn-win" onclick="openResultModal('${ch.id}')">Record result</button>
+            <button class="btn btn-danger" onclick="openCancelModal('${ch.id}')">Cancel</button>
            </div>`
         : '';
 
@@ -765,6 +782,25 @@ function openResultModal(challengeId) {
   document.getElementById('resultModalDesc').textContent =
     `${ch.challengerName} challenged ${ch.challengedName}. Who won?`;
   openModal('resultModal');
+}
+
+let activeCancelChallengeId = null;
+
+function openCancelModal(challengeId) {
+  activeCancelChallengeId = challengeId;
+  const ch = state.challenges.find(c => c.id === challengeId);
+  document.getElementById('cancelModalDesc').textContent =
+    `Are you sure you want to cancel the challenge between ${ch.challengerName} and ${ch.challengedName}? No rank changes will be made.`;
+  openModal('cancelModal');
+}
+
+async function submitCancel() {
+  closeModal('cancelModal');
+  showToast('⏳ Cancelling challenge…');
+  await apiCall('cancel', { challengeId: activeCancelChallengeId });
+  await loadData();
+  showToast('✅ Challenge cancelled.');
+  renderCurrentTab();
 }
 
 async function submitResult(winner) {
