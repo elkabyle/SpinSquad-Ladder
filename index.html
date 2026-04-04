@@ -648,10 +648,11 @@ function renderChallenges() {
       else if (daysLeft <= 5) { pill = `${daysLeft} days left`; pillClass = 'soon'; }
       else { pill = `${daysLeft} days left`; pillClass = 'ok'; }
 
+      const isChallenger = ch.challengerId === state.currentPlayerId;
       const resultBtns = isMyChallenge
         ? `<div class="result-btns">
             <button class="btn btn-win" onclick="openResultModal('${ch.id}')">Record result</button>
-            <button class="btn btn-danger" onclick="openCancelModal('${ch.id}')">Cancel</button>
+            ${isChallenger ? `<button class="btn btn-danger" onclick="openCancelModal('${ch.id}')">Cancel</button>` : ''}
            </div>`
         : '';
 
