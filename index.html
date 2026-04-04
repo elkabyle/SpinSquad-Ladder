@@ -548,9 +548,22 @@ function renderLadder() {
     const isTarget = me && !isMe && (p.rank === me.rank - 1 || p.rank === me.rank - 2);
     const isChallenged = activeChIds.has(p.id);
 
+    const asChallenger = state.challenges.find(c => c.challengerId === p.id);
+    const asChallenged = state.challenges.find(c => c.challengedId === p.id);
+    let challengeBadge = '';
+    if (asChallenged) challengeBadge = `<span class="challenge-badge">challenged by ${asChallenged.challengerName}</span>`;
+    else if (asChallenger) challengeBadge = `<span class="challenge-badge">challenging ${asChallenger.challengedName}</span>`;
+
     let actionHtml = '';
     if (!state.currentPlayerId) {
-      actionHtml = `<button class="btn btn-muted btn-sm">select player</button>`;
+      const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
+      if (ch) {
+        const dLeft = 10 - daysBetween(ch.date, new Date());
+        const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
+        actionHtml = `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
+      } else {
+        actionHtml = `<button class="btn btn-muted btn-sm">select player</button>`;
+      }
     } else if (isMe) {
       actionHtml = '';
     } else if (isChallenged) {
@@ -586,20 +599,13 @@ function renderLadder() {
         <div class="player-name">
           ${p.name}
           ${isMe ? '<span class="you-badge">you</span>' : ''}
-          ${(() => {
-            const asChallenger = state.challenges.find(c => c.challengerId === p.id);
-            const asChallenged = state.challenges.find(c => c.challengedId === p.id);
-            if (asChallenged) return `<span class="challenge-badge">challenged by ${asChallenged.challengerName}</span>`;
-            if (asChallenger) return `<span class="challenge-badge">challenging ${asChallenger.challengedName}</span>`;
-            return '';
-          })()}
+          ${challengeBadge}
         </div>
         <div class="player-stats">${p.wins}W · ${p.losses}L · ${winrate}% win rate</div>
       </div>
       <div class="action-area">${actionHtml}</div>
     </div>`;
   }).join('');
-
   document.getElementById('tab-ladder').innerHTML = `<div class="ladder-list">${html}</div>`;
 }
 
