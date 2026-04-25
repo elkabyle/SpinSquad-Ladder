@@ -581,7 +581,15 @@ function renderLadder() {
         actionHtml = `<button class="btn btn-muted btn-sm">select player</button>`;
       }
     } else if (isMe) {
-      actionHtml = '';
+      const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
+      if (ch) {
+        const dLeft = 10 - daysBetween(ch.date, new Date());
+        const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
+        actionHtml = dLeft < 0 ? '' : `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
+      } else {
+        actionHtml = '';
+      }
+    }
     } else if (isChallenged) {
       const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
       const dLeft = ch ? 10 - daysBetween(ch.date, new Date()) : '?';
