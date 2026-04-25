@@ -628,7 +628,7 @@ function renderLadder() {
 // ============================================================
 //  CHALLENGES
 // ============================================================
-async function renderChallenges() {
+function renderChallenges() {
   const active = state.challenges.filter(c => c.status === 'active');
   const me = state.players.find(p => p.id === state.currentPlayerId);
 
@@ -643,11 +643,7 @@ async function renderChallenges() {
       const daysLeft = 9 - days;
       const isMyChallenge = ch.challengerId === state.currentPlayerId || ch.challengedId === state.currentPlayerId;
       let pill = '', pillClass = '';
-      if (daysLeft <= 0) {
-        await loadData();
-        renderCurrentTab();
-        return;
-      }
+      if (daysLeft <= 0) { pill = 'Expired — auto forfeit applied'; pillClass = 'expired'; }
       else if (daysLeft <= 2) { pill = `${daysLeft}d left — urgent!`; pillClass = 'urgent'; }
       else if (daysLeft <= 5) { pill = `${daysLeft} days left`; pillClass = 'soon'; }
       else { pill = `${daysLeft} days left`; pillClass = 'ok'; }
