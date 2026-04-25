@@ -589,7 +589,6 @@ function renderLadder() {
       } else {
         actionHtml = '';
       }
-    }
     } else if (isChallenged) {
       const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
       const dLeft = ch ? 10 - daysBetween(ch.date, new Date()) : '?';
