@@ -574,7 +574,7 @@ function renderLadder() {
     if (!state.currentPlayerId) {
       const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
       if (ch) {
-        const dLeft = 9 - daysBetween(ch.date, new Date());
+        const dLeft = 10 - daysBetween(ch.date, new Date());
         const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
         actionHtml = dLeft < 0 ? '' : `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
       } else {
@@ -584,13 +584,13 @@ function renderLadder() {
       actionHtml = '';
     } else if (isChallenged) {
       const ch = state.challenges.find(c => c.challengedId === p.id || c.challengerId === p.id);
-      const dLeft = ch ? 9 - daysBetween(ch.date, new Date()) : '?';
+      const dLeft = ch ? 10 - daysBetween(ch.date, new Date()) : '?';
       const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
       actionHtml = dLeft < 0 ? '' : `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
     } else if (isTarget && !meHasChallenge) {
       const targetInChallenge = state.challenges.find(c => c.challengerId === p.id || c.challengedId === p.id);
       if (targetInChallenge) {
-        const dLeft = 9 - daysBetween(targetInChallenge.date, new Date());
+        const dLeft = 10 - daysBetween(targetInChallenge.date, new Date());
         const dClass = dLeft <= 2 ? 'btn-danger' : 'btn-pending';
         actionHtml = dLeft < 0 ? '' : `<button class="btn ${dClass} btn-sm">⏳ ${dLeft}d left</button>`;
       } else {
@@ -640,7 +640,7 @@ function renderChallenges() {
     html += '<div class="section-label">Active challenges</div>';
     active.forEach(ch => {
       const days = daysBetween(ch.date, new Date());
-      const daysLeft = 9 - days;
+      const daysLeft = 10 - days;
       const isMyChallenge = ch.challengerId === state.currentPlayerId || ch.challengedId === state.currentPlayerId;
       let pill = '', pillClass = '';
       if (daysLeft <= 0) { pill = 'Expired — auto forfeit applied'; pillClass = 'expired'; }
