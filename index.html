@@ -491,6 +491,8 @@ function simulateAction(action, payload) {
         text: `${challenged.name} defended vs ${challenger.name}`, rankChange: 'No change' });
       challenged.wins = (challenged.wins || 0) + 1;
       challenger.losses = (challenger.losses || 0) + 1;
+      if (!state.cooldowns) state.cooldowns = [];
+      state.cooldowns.push({ challengerId: ch.challengerId, challengedId: ch.challengedId, until: new Date(Date.now() + 86400000) });
     }
     state.players.sort((a, b) => a.rank - b.rank);
     state.challenges = state.challenges.filter(c => c.status !== 'done');
@@ -679,6 +681,7 @@ function renderChallenges() {
     <li>Challenger loses → no rank change for either player.</li>
     <li>No match within 10 days → challenged player auto-forfeits (drops 1 ranks).</li>
     <li>Only one active challenge at a time per player.</li>
+    <li>If challenger loses, they must wait 1 day before challenging the same player again.</li>
   </ul></div>`;
 
   document.getElementById('tab-challenges').innerHTML = html;
@@ -751,7 +754,11 @@ function openChallengeModal(targetId) {
   const eligible = state.players.filter(p => {
     if (p.rank !== me.rank - 1 && p.rank !== me.rank - 2) return false;
     const inChallenge = state.challenges.some(c => c.challengerId === p.id || c.challengedId === p.id);
-    return !inChallenge;
+    if (inChallenge) return false;
+    const onCooldown = (state.cooldowns || []).some(cd =>
+      cd.challengerId === state.currentPlayerId && cd.challengedId === p.id && new Date() < new Date(cd.until)
+    );
+    return !onCooldown;
   });
   const sel = document.getElementById('challengeTarget');
 
