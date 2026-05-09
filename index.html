@@ -824,7 +824,11 @@ async function submitResult(winner) {
 //  UTILS
 // ============================================================
 function daysBetween(dateStr, now) {
-  return Math.floor((now - new Date(dateStr)) / 86400000);
+  const start = new Date(dateStr);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setHours(0, 0, 0, 0);
+  return Math.floor((end - start) / 86400000);
 }
 
 function formatDate(dateStr) {
