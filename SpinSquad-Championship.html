@@ -179,73 +179,6 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
   .logo h1 { font-size: 1.5rem; }
 }
 
-/* ── Mobile bracket (phones < 768px) ── */
-@media (max-width: 767px) {
-  .bracket-scroll { display: none; }
-  #mobile-bracket { display: block; }
-  main { padding: 1rem; }
-  header { padding: 0.9rem 1rem; }
-  .logo h1 { font-size: 1.4rem; }
-  .logo-icon { font-size: 22px; }
-  .stats-bar { gap: 1rem; padding: 0.75rem 0 1rem; }
-  .stat-val { font-size: 1.4rem; }
-}
-@media (min-width: 768px) {
-  #mobile-bracket { display: none; }
-}
-
-/* Mobile round sections */
-#mobile-bracket { display: none; }
-.mobile-round {
-  border: 1px solid var(--border); border-radius: 10px;
-  overflow: hidden; margin-bottom: 10px;
-}
-.mobile-round-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; background: var(--surface2); cursor: pointer;
-  user-select: none; transition: background 0.15s;
-}
-.mobile-round-header:hover { background: var(--surface); }
-.mobile-round-title {
-  font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem;
-  letter-spacing: 1.5px; color: var(--accent);
-}
-.mobile-round-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
-.mobile-round-chevron {
-  font-size: 12px; color: var(--muted); transition: transform 0.2s; flex-shrink: 0;
-}
-.mobile-round.open .mobile-round-chevron { transform: rotate(180deg); }
-.mobile-round-body { display: none; padding: 8px; background: var(--surface); }
-.mobile-round.open .mobile-round-body { display: block; }
-
-/* Mobile match cards */
-.mobile-match {
-  display: flex; flex-direction: column;
-  border: 1px solid var(--border); border-radius: 8px;
-  overflow: hidden; margin-bottom: 8px; background: var(--bg);
-}
-.mobile-match:last-child { margin-bottom: 0; }
-.mobile-match.clickable { cursor: pointer; }
-.mobile-match.clickable:active { border-color: var(--accent); }
-.mobile-match-num {
-  font-size: 10px; color: var(--muted); font-weight: 600;
-  padding: 4px 12px 0; letter-spacing: 0.5px;
-}
-.mobile-player {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; font-size: 14px; position: relative;
-}
-.mobile-player:first-of-type { border-bottom: 1px solid var(--border); }
-.mobile-player.winner { background: var(--winner-glow); color: var(--accent); font-weight: 600; }
-.mobile-player.winner::after { content: '✓'; position: absolute; right: 12px; font-size: 12px; color: var(--accent); }
-.mobile-player.loser { color: var(--muted); }
-.mobile-player.tbd { color: var(--muted); font-style: italic; }
-.mobile-seed { font-size: 10px; color: var(--muted); font-weight: 600; min-width: 20px; }
-.mobile-status {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 4px 12px 6px; font-size: 11px; color: var(--muted);
-}
-.mobile-status .tap-hint { color: var(--accent); font-size: 11px; }
 
 
 /* Loading indicator */
@@ -324,12 +257,10 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 
   <!-- BRACKET -->
   <div id="bracket-panel">
-    <div id="debug-panel" style="background:#1a0a00;border:1px solid #ff4d6d;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:11px;font-family:monospace;color:#ff9;display:none;max-height:200px;overflow-y:auto;"></div>
     <div class="stats-bar" id="stats-bar"></div>
     <div class="bracket-scroll">
       <div class="bracket-container" id="bracket-container"></div>
     </div>
-    <div id="mobile-bracket"></div>
   </div>
 </main>
 
@@ -427,12 +358,10 @@ async function loadRemoteBracket() {
     const text = await res.text();
     if (!text) throw new Error('Empty response');
     const data = JSON.parse(text);
-    dbg('loadRemote raw: bracket type=' + typeof data.bracket + ' val=' + JSON.stringify(data.bracket).substring(0,80));
 
     if (data.bracket) {
       // data.bracket is the string we stored: '{"bracket":{rounds:[...]}, "drawn":true}'
       const stored = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
-      dbg('stored keys=' + Object.keys(stored).join(','));
       // stored = { bracket: { rounds:[...] }, drawn: true }
       // OR stored = { rounds:[...] }  (older format)
       if (stored.rounds) {
@@ -442,19 +371,15 @@ async function loadRemoteBracket() {
         // Wrapped format
         state.bracket = stored.bracket;
       } else {
-        dbg('ERROR: unrecognised bracket format: ' + JSON.stringify(stored).substring(0,120));
         return false;
       }
       state.drawn = true;
-      dbg('bracket loaded OK, rounds=' + state.bracket.rounds.length + ' r0 matches=' + state.bracket.rounds[0].length);
-      saveLocalState();
+            saveLocalState();
       return true;
     } else {
-      dbg('no bracket in response');
-    }
+          }
   } catch(e) {
-    dbg('loadRemoteBracket error: ' + e.message);
-    return await loadRemoteViaJsonp();
+        return await loadRemoteViaJsonp();
   }
   return false;
 }
@@ -541,11 +466,9 @@ if (state.drawn && state.bracket) {
 }
 
 // 3. Then fetch latest from sheet in background and refresh if different
-dbg('boot: state.drawn=' + state.drawn + ' bracket=' + (state.bracket?'yes':'no') + ' SETUP_MODE=' + SETUP_MODE);
 showLoadingIndicator(true);
 loadRemoteBracket().then(loaded => {
   showLoadingIndicator(false);
-  dbg('loadRemoteBracket done: loaded=' + loaded + ' state.drawn=' + state.drawn + ' bracket=' + (state.bracket?'yes':'no'));
   if (loaded) {
     if (state.drawn && state.bracket) {
       if (SETUP_MODE) document.getElementById('reset-btn').style.display = '';
@@ -744,12 +667,9 @@ function buildSeededSlots() {
 
 function startDraw() {
   savePlayers(); saveSchedule();
-  dbg('startDraw: state.players.length=' + state.players.length + ' first=' + state.players[0]);
   const named = state.players.map(p => (p && p.trim() && !p.startsWith('Player ')) ? p.trim() : null);
-  dbg('named non-null: ' + named.filter(Boolean).length);
   const slots = buildSeededSlots();
   const seeded = slots.map(s => named[s-1] || `BYE ${s}`);
-  dbg('seeded[0]=' + seeded[0] + ' seeded[1]=' + seeded[1]);
 
   const rounds = [];
   const r0 = [];
@@ -765,18 +685,14 @@ function startDraw() {
   }
   state.bracket = { rounds };
   state.drawn = true;
-  dbg('bracket built, rounds=' + rounds.length + ' r0 matches=' + r0.length);
   saveLocalState();
   if (SETUP_MODE) document.getElementById('reset-btn').style.display = '';
-  dbg('calling switchTab bracket');
   switchTab('bracket');
-  dbg('switchTab done');
   showToast('Draw complete! Saving to sheet…');
   showLoadingIndicator(true);
   saveRemoteBracket().then(ok => {
     showLoadingIndicator(false);
-    dbg('saveRemoteBracket result: ' + ok);
-    showToast(ok ? 'Draw saved! Players can now see the bracket.' : 'Draw saved locally — sheet sync failed.');
+        showToast(ok ? 'Draw saved! Players can now see the bracket.' : 'Draw saved locally — sheet sync failed.');
   });
 }
 
@@ -801,12 +717,9 @@ function updateNextRounds() {
 
 // ── Render bracket ─────────────────────────────────────────────────────
 function renderBracket() {
-  dbg('renderBracket: state.bracket=' + (state.bracket ? 'yes rounds=' + state.bracket.rounds.length : 'NULL'));
   if (!state.bracket) {
     document.getElementById('bracket-container').innerHTML =
       `<p style="color:var(--muted);padding:2rem;font-size:14px;">No draw yet.${SETUP_MODE ? ' Go to Setup to generate the bracket.' : ' Check back soon!'}</p>`;
-    document.getElementById('mobile-bracket').innerHTML =
-      `<p style="color:var(--muted);padding:2rem;font-size:14px;text-align:center;">No draw yet.${SETUP_MODE ? ' Go to Setup to generate the bracket.' : ' Check back soon!'}</p>`;
     document.getElementById('stats-bar').innerHTML = '';
     return;
   }
@@ -925,10 +838,6 @@ function renderBracket() {
   svg.appendChild(stub);
   container.appendChild(svg);
 
-  // Also render mobile view
-  dbg('calling renderMobileBracket');
-  renderMobileBracket();
-  dbg('renderMobileBracket done');
 }
 
 function slotCls(m, which) {
@@ -1000,120 +909,7 @@ function switchTab(tab) {
 }
 
 
-// ── Mobile bracket renderer ────────────────────────────────────────────
-function renderMobileBracket() {
-  const container = document.getElementById('mobile-bracket');
-  dbg('renderMobileBracket: container=' + (container?'yes':'NO') + ' bracket=' + (state.bracket?'yes':'no') + ' windowW=' + window.innerWidth);
-  if (!container || !state.bracket) return;
-  const rounds = state.bracket.rounds;
-  dbg('mobile rounds=' + rounds.length);
-  const canClick = !VIEW_MODE;
 
-  // Determine which round is "active":
-  // First round that has playable matches AND isn't fully done.
-  // Default to round 0 (always open on fresh draw).
-  let activeRound = 0;
-  for (let ri = 0; ri < rounds.length; ri++) {
-    const r = rounds[ri];
-    const hasPlayable = r.some(m => m.p1 && m.p2);
-    const allDone    = hasPlayable && r.filter(m => m.p1 && m.p2).every(m => m.winner);
-    if (hasPlayable && !allDone) { activeRound = ri; break; }
-  }
-
-  container.innerHTML = '';
-
-  rounds.forEach((matches, ri) => {
-    const allDone     = matches.every(m => !m.p1 || !m.p2 || m.winner);
-    const hasPlayable = matches.some(m => m.p1 && m.p2);
-    const isActive    = ri === activeRound;
-    const isOpen      = isActive; // auto-collapse: only active round open
-
-    // Round status summary
-    const played  = matches.filter(m => m.winner).length;
-    const total   = matches.filter(m => m.p1 && m.p2).length;
-    const schedVal = state.schedule[ROUND_KEYS[ri]];
-    let schedStr = '';
-    if (schedVal) {
-      const d = new Date(schedVal);
-      schedStr = ' · ' + d.toLocaleDateString('en-NZ',{day:'numeric',month:'short'});
-    }
-
-    const section = document.createElement('div');
-    section.className = 'mobile-round' + (isOpen ? ' open' : '');
-
-    let statusText = '';
-    if (!hasPlayable)    statusText = 'Waiting for previous round';
-    else if (allDone)    statusText = 'Complete ✓';
-    else                 statusText = `${played}/${total} matches played`;
-
-    section.innerHTML = `
-      <div class="mobile-round-header" onclick="toggleMobileRound(this)">
-        <div>
-          <div class="mobile-round-title">${ROUNDS[ri]}</div>
-          <div class="mobile-round-meta">${statusText}${schedStr}</div>
-        </div>
-        <span class="mobile-round-chevron">▼</span>
-      </div>
-      <div class="mobile-round-body" id="mobile-round-body-${ri}"></div>`;
-
-    container.appendChild(section);
-
-    // Populate matches
-    const body = section.querySelector('.mobile-round-body');
-    matches.forEach((m, mi) => {
-      const p1 = m.p1 || 'TBD';
-      const p2 = m.p2 || 'TBD';
-      const isPossible = !!(m.p1 && m.p2);
-      const clickable  = canClick && isPossible;
-
-      const card = document.createElement('div');
-      card.className = 'mobile-match' + (clickable ? ' clickable' : '');
-      if (clickable) card.onclick = () => openModal(m.id);
-
-      const p1cls = slotCls(m,'p1').replace('player-slot','mobile-player');
-      const p2cls = slotCls(m,'p2').replace('player-slot','mobile-player');
-
-      card.innerHTML = `
-        ${ri === 0 ? `<div class="mobile-match-num">Match ${mi+1} · Seeds ${m.seed1} vs ${m.seed2}</div>` : `<div class="mobile-match-num">Match ${mi+1}</div>`}
-        <div class="${p1cls}">
-          ${ri===0 ? `<span class="mobile-seed">${m.seed1}</span>` : ''}
-          <span>${p1}</span>
-        </div>
-        <div class="${p2cls}">
-          ${ri===0 ? `<span class="mobile-seed">${m.seed2}</span>` : ''}
-          <span>${p2}</span>
-        </div>
-        ${clickable && !m.winner ? '<div class="mobile-status"><span></span><span class="tap-hint">Tap to enter winner →</span></div>' : ''}`;
-
-      body.appendChild(card);
-    });
-
-    // Champion display in final round
-    if (ri === 4 && rounds[4][0].winner) {
-      const champ = document.createElement('div');
-      champ.style.cssText = 'text-align:center;padding:1.5rem 1rem;';
-      champ.innerHTML = `<div style="font-size:2.5rem">🏆</div>
-        <div style="font-family:Bebas Neue,sans-serif;font-size:1.1rem;letter-spacing:3px;color:var(--accent3);margin-top:4px;">Champion</div>
-        <div style="font-family:Bebas Neue,sans-serif;font-size:2rem;color:var(--text);margin-top:4px;">${rounds[4][0].winner}</div>`;
-      body.appendChild(champ);
-    }
-  });
-}
-
-function toggleMobileRound(headerEl) {
-  headerEl.parentElement.classList.toggle('open');
-}
-
-
-// ── Debug logging ──────────────────────────────────────────────────────
-function dbg(msg) {
-  console.log('[DBG]', msg);
-  const p = document.getElementById('debug-panel');
-  if (!p) return;
-  p.style.display = 'block';
-  p.innerHTML += '<div>' + new Date().toLocaleTimeString() + ' ' + msg + '</div>';
-  p.scrollTop = p.scrollHeight;
-}
 
 function showLoadingIndicator(on) {
   const bar = document.getElementById('loading-bar');
