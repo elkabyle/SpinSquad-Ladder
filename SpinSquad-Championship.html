@@ -926,7 +926,9 @@ function renderBracket() {
   container.appendChild(svg);
 
   // Also render mobile view
+  dbg('calling renderMobileBracket');
   renderMobileBracket();
+  dbg('renderMobileBracket done');
 }
 
 function slotCls(m, which) {
@@ -1001,8 +1003,10 @@ function switchTab(tab) {
 // ── Mobile bracket renderer ────────────────────────────────────────────
 function renderMobileBracket() {
   const container = document.getElementById('mobile-bracket');
+  dbg('renderMobileBracket: container=' + (container?'yes':'NO') + ' bracket=' + (state.bracket?'yes':'no') + ' windowW=' + window.innerWidth);
   if (!container || !state.bracket) return;
   const rounds = state.bracket.rounds;
+  dbg('mobile rounds=' + rounds.length);
   const canClick = !VIEW_MODE;
 
   // Determine which round is "active" (first round with playable unfinished matches)
