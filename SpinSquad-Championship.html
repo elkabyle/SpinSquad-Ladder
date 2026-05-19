@@ -324,6 +324,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 
   <!-- BRACKET -->
   <div id="bracket-panel">
+    <div id="debug-panel" style="background:#1a0a00;border:1px solid #ff4d6d;border-radius:8px;padding:12px;margin-bottom:1rem;font-size:11px;font-family:monospace;color:#ff9;display:none;max-height:200px;overflow-y:auto;"></div>
     <div class="stats-bar" id="stats-bar"></div>
     <div class="bracket-scroll">
       <div class="bracket-container" id="bracket-container"></div>
@@ -524,13 +525,14 @@ if (state.drawn && state.bracket) {
 }
 
 // 3. Then fetch latest from sheet in background and refresh if different
+dbg('boot: state.drawn=' + state.drawn + ' bracket=' + (state.bracket?'yes':'no') + ' SETUP_MODE=' + SETUP_MODE);
 showLoadingIndicator(true);
 loadRemoteBracket().then(loaded => {
   showLoadingIndicator(false);
+  dbg('loadRemoteBracket done: loaded=' + loaded + ' state.drawn=' + state.drawn + ' bracket=' + (state.bracket?'yes':'no'));
   if (loaded) {
     if (state.drawn && state.bracket) {
       if (SETUP_MODE) document.getElementById('reset-btn').style.display = '';
-      // Re-render bracket with fresh data
       if (document.getElementById('bracket-panel').style.display !== 'none') {
         renderBracket();
       } else {
@@ -726,11 +728,12 @@ function buildSeededSlots() {
 
 function startDraw() {
   savePlayers(); saveSchedule();
-  // Read from state.players (just saved above) — not from DOM inputs
-  // This works reliably on all devices including mobile
+  dbg('startDraw: state.players.length=' + state.players.length + ' first=' + state.players[0]);
   const named = state.players.map(p => (p && p.trim() && !p.startsWith('Player ')) ? p.trim() : null);
+  dbg('named non-null: ' + named.filter(Boolean).length);
   const slots = buildSeededSlots();
   const seeded = slots.map(s => named[s-1] || `BYE ${s}`);
+  dbg('seeded[0]=' + seeded[0] + ' seeded[1]=' + seeded[1]);
 
   const rounds = [];
   const r0 = [];
@@ -746,13 +749,17 @@ function startDraw() {
   }
   state.bracket = { rounds };
   state.drawn = true;
+  dbg('bracket built, rounds=' + rounds.length + ' r0 matches=' + r0.length);
   saveLocalState();
   if (SETUP_MODE) document.getElementById('reset-btn').style.display = '';
+  dbg('calling switchTab bracket');
   switchTab('bracket');
+  dbg('switchTab done');
   showToast('Draw complete! Saving to sheet…');
   showLoadingIndicator(true);
   saveRemoteBracket().then(ok => {
     showLoadingIndicator(false);
+    dbg('saveRemoteBracket result: ' + ok);
     showToast(ok ? 'Draw saved! Players can now see the bracket.' : 'Draw saved locally — sheet sync failed.');
   });
 }
@@ -778,6 +785,7 @@ function updateNextRounds() {
 
 // ── Render bracket ─────────────────────────────────────────────────────
 function renderBracket() {
+  dbg('renderBracket: state.bracket=' + (state.bracket ? 'yes rounds=' + state.bracket.rounds.length : 'NULL'));
   if (!state.bracket) {
     document.getElementById('bracket-container').innerHTML =
       `<p style="color:var(--muted);padding:2rem;font-size:14px;">No draw yet.${SETUP_MODE ? ' Go to Setup to generate the bracket.' : ' Check back soon!'}</p>`;
@@ -1073,6 +1081,17 @@ function renderMobileBracket() {
 
 function toggleMobileRound(headerEl) {
   headerEl.parentElement.classList.toggle('open');
+}
+
+
+// ── Debug logging ──────────────────────────────────────────────────────
+function dbg(msg) {
+  console.log('[DBG]', msg);
+  const p = document.getElementById('debug-panel');
+  if (!p) return;
+  p.style.display = 'block';
+  p.innerHTML += '<div>' + new Date().toLocaleTimeString() + ' ' + msg + '</div>';
+  p.scrollTop = p.scrollHeight;
 }
 
 function showLoadingIndicator(on) {
