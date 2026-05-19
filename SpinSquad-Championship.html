@@ -434,15 +434,18 @@ async function loadRemoteBracket() {
 }
 
 async function saveRemoteBracket() {
-  // Save bracket + drawn flag to sheet via POST (avoids URL length limits)
-  const payload = { action: 'saveTournament', bracket: JSON.stringify({ bracket: state.bracket, drawn: state.drawn }) };
+  // Apps Script requires no-cors mode with form-encoded POST.
+  // We can't read the response in no-cors, so we assume success if no network error.
+  const bracketJson = JSON.stringify({ bracket: state.bracket, drawn: state.drawn });
+  const formData = new FormData();
+  formData.append('action', 'saveTournament');
+  formData.append('bracket', bracketJson);
   try {
-    const res = await fetch(SPINSQUAD_API, {
+    await fetch(SPINSQUAD_API, {
       method: 'POST',
-      body: JSON.stringify(payload),
-      headers: { 'Content-Type': 'application/json' }
+      mode: 'no-cors',
+      body: formData
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
     saveLocalState();
     return true;
   } catch(e) {
