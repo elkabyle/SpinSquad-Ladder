@@ -724,11 +724,9 @@ function buildSeededSlots() {
 
 function startDraw() {
   savePlayers(); saveSchedule();
-  const named = [];
-  for (let i = 1; i <= 32; i++) {
-    const v = (document.getElementById(`p${i}`)?.value||'').trim();
-    named.push(v || null);
-  }
+  // Read from state.players (just saved above) — not from DOM inputs
+  // This works reliably on all devices including mobile
+  const named = state.players.map(p => (p && p.trim() && !p.startsWith('Player ')) ? p.trim() : null);
   const slots = buildSeededSlots();
   const seeded = slots.map(s => named[s-1] || `BYE ${s}`);
 
