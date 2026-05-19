@@ -434,17 +434,20 @@ async function loadRemoteBracket() {
 }
 
 async function saveRemoteBracket() {
-  // Save bracket + drawn flag to sheet
-  const payload = { bracket: state.bracket, drawn: state.drawn };
+  // Save bracket + drawn flag to sheet via POST (avoids URL length limits)
+  const payload = { action: 'saveTournament', bracket: JSON.stringify({ bracket: state.bracket, drawn: state.drawn }) };
   try {
-    const url = SPINSQUAD_API + '?action=saveTournament&bracket=' + encodeURIComponent(JSON.stringify(payload));
-    const res = await fetch(url);
+    const res = await fetch(SPINSQUAD_API, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json' }
+    });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    saveLocalState(); // keep cache in sync
+    saveLocalState();
     return true;
   } catch(e) {
     console.warn('Could not save remote bracket:', e.message);
-    saveLocalState(); // at least save locally
+    saveLocalState();
     return false;
   }
 }
