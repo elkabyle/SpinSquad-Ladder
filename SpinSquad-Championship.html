@@ -416,21 +416,63 @@ function saveLocalState() {
 
 // Google Sheet: source of truth for bracket data (shared across all devices)
 async function loadRemoteBracket() {
+  // Try fetch with explicit redirect following (fixes Safari/mobile issues)
   try {
-    const res = await fetch(SPINSQUAD_API + '?action=getTournament');
+    const res = await fetch(SPINSQUAD_API + '?action=getTournament', {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-cache'
+    });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+    const text = await res.text();
+    if (!text) throw new Error('Empty response');
+    const data = JSON.parse(text);
     if (data.bracket) {
-      // Remote has data — merge into state (bracket + drawn flag only)
-      state.bracket = data.bracket.bracket || data.bracket;
+      const parsed = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
+      state.bracket = parsed.bracket || parsed;
       state.drawn   = !!(state.bracket);
-      saveLocalState(); // update cache
+      saveLocalState();
       return true;
     }
   } catch(e) {
     console.warn('Could not load remote bracket:', e.message);
+    // Try JSONP fallback via script tag
+    return await loadRemoteViaJsonp();
   }
   return false;
+}
+
+function loadRemoteViaJsonp() {
+  return new Promise((resolve) => {
+    const callbackName = 'cb_' + Date.now();
+    const script = document.createElement('script');
+    const timeout = setTimeout(() => {
+      delete window[callbackName];
+      script.remove();
+      resolve(false);
+    }, 8000);
+
+    window[callbackName] = function(data) {
+      clearTimeout(timeout);
+      delete window[callbackName];
+      script.remove();
+      try {
+        if (data.bracket) {
+          const parsed = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
+          state.bracket = parsed.bracket || parsed;
+          state.drawn   = !!(state.bracket);
+          saveLocalState();
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      } catch(e) { resolve(false); }
+    };
+
+    script.src = SPINSQUAD_API + '?action=getTournament&callback=' + callbackName;
+    script.onerror = () => { clearTimeout(timeout); resolve(false); };
+    document.head.appendChild(script);
+  });
 }
 
 async function saveRemoteBracket() {
