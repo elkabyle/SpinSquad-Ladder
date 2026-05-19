@@ -417,7 +417,6 @@ function saveLocalState() {
 
 // Google Sheet: source of truth for bracket data (shared across all devices)
 async function loadRemoteBracket() {
-  // Try fetch with explicit redirect following (fixes Safari/mobile issues)
   try {
     const res = await fetch(SPINSQUAD_API + '?action=getTournament', {
       method: 'GET',
@@ -428,16 +427,33 @@ async function loadRemoteBracket() {
     const text = await res.text();
     if (!text) throw new Error('Empty response');
     const data = JSON.parse(text);
+    dbg('loadRemote raw: bracket type=' + typeof data.bracket + ' val=' + JSON.stringify(data.bracket).substring(0,80));
+
     if (data.bracket) {
-      const parsed = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
-      state.bracket = parsed.bracket || parsed;
-      state.drawn   = !!(state.bracket);
+      // data.bracket is the string we stored: '{"bracket":{rounds:[...]}, "drawn":true}'
+      const stored = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
+      dbg('stored keys=' + Object.keys(stored).join(','));
+      // stored = { bracket: { rounds:[...] }, drawn: true }
+      // OR stored = { rounds:[...] }  (older format)
+      if (stored.rounds) {
+        // Direct bracket object
+        state.bracket = stored;
+      } else if (stored.bracket && stored.bracket.rounds) {
+        // Wrapped format
+        state.bracket = stored.bracket;
+      } else {
+        dbg('ERROR: unrecognised bracket format: ' + JSON.stringify(stored).substring(0,120));
+        return false;
+      }
+      state.drawn = true;
+      dbg('bracket loaded OK, rounds=' + state.bracket.rounds.length + ' r0 matches=' + state.bracket.rounds[0].length);
       saveLocalState();
       return true;
+    } else {
+      dbg('no bracket in response');
     }
   } catch(e) {
-    console.warn('Could not load remote bracket:', e.message);
-    // Try JSONP fallback via script tag
+    dbg('loadRemoteBracket error: ' + e.message);
     return await loadRemoteViaJsonp();
   }
   return false;
