@@ -1009,14 +1009,15 @@ function renderMobileBracket() {
   dbg('mobile rounds=' + rounds.length);
   const canClick = !VIEW_MODE;
 
-  // Determine which round is "active" (first round with playable unfinished matches)
+  // Determine which round is "active":
+  // First round that has playable matches AND isn't fully done.
+  // Default to round 0 (always open on fresh draw).
   let activeRound = 0;
   for (let ri = 0; ri < rounds.length; ri++) {
     const r = rounds[ri];
     const hasPlayable = r.some(m => m.p1 && m.p2);
-    const allDone    = r.every(m => !m.p1 || !m.p2 || m.winner);
+    const allDone    = hasPlayable && r.filter(m => m.p1 && m.p2).every(m => m.winner);
     if (hasPlayable && !allDone) { activeRound = ri; break; }
-    if (ri === rounds.length - 1) activeRound = ri; // final
   }
 
   container.innerHTML = '';
