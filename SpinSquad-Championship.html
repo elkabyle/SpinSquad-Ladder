@@ -500,7 +500,9 @@ async function saveRemoteBracket() {
 // saveState: always saves locally, also saves remotely (bracket data only)
 function saveState() {
   saveLocalState();
-  saveRemoteBracket(); // fire and forget — UI doesn't wait
+  if (state.drawn && state.bracket) {
+    saveRemoteBracket(); // fire and forget — only when bracket exists
+  }
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────
@@ -573,13 +575,13 @@ function savePlayers() {
     const v = (document.getElementById(`p${i}`)?.value||'').trim();
     state.players.push(v || `Player ${i}`);
   }
-  saveState(); showToast('Players saved!');
+  saveLocalState(); showToast('Players saved!');
 }
 function saveSchedule() {
   state.schedule = {};
   ROUND_KEYS.forEach(k => { const v = document.getElementById(`sched_${k}`)?.value; if(v) state.schedule[k]=v; });
-  saveState();
-  if (state.drawn) renderBracket();
+  saveLocalState(); // local only — remote sync only happens after draw
+  if (state.drawn) { renderBracket(); saveRemoteBracket(); }
   showToast('Schedule saved!');
 }
 function clearPlayers() {
