@@ -698,8 +698,10 @@ function startDraw() {
 
 function resetTournament() {
   if (!confirm('Reset the draw? All results will be lost. Player names will be kept.')) return;
-  state.drawn = false; state.bracket = null; saveState();
-  window.location.reload();
+  state.drawn = false; state.bracket = null;
+  saveLocalState();
+  // Clear the sheet too, then reload
+  saveRemoteBracket().then(() => window.location.reload());
 }
 
 // ── Propagate winners ──────────────────────────────────────────────────
