@@ -370,6 +370,18 @@ const {
 const ROSTER_KEY = "ttc:roster";
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const SESSION_KEY = "ttc:session";
+const MARTIN_HISTORY_KEY = "ttc:martinHistory";
+// Who has trained with Martin and when, carried across weeks/sessions (not
+// just within one session) so that players who missed out one week — e.g.
+// because time ran out — are first in line the next time Martin is in.
+// `nextRoundIndex` keeps climbing across every session ever run, so
+// "least recently trained" comparisons stay meaningful between weeks
+// instead of resetting to a tie every time a new session starts.
+const emptyMartinHistory = () => ({
+  trainedCount: {},
+  lastRound: {},
+  nextRoundIndex: 0
+});
 async function loadStorage(key) {
   try {
     const res = await window.storage.get(key, false);
@@ -1783,13 +1795,32 @@ function SessionScreen({
   players,
   setPlayers,
   config,
+  martinHistory,
+  setMartinHistory,
   onEnd
 }) {
   const ROUND_SECONDS = (config.roundMinutes || DEFAULT_ROUND_SECONDS / 60) * 60;
   const TOTAL_ROUNDS = config.totalRounds || DEFAULT_TOTAL_ROUNDS;
   const [presentIds, setPresentIds] = useState(() => new Set(config.presentIds));
   const [isDoublesMode, setIsDoublesMode] = useState(false);
-  const [history, setHistory] = useState(emptyHistory);
+  // Pair/rest fairness stays scoped to this session (round numbering resets
+  // to 0 below), but Martin's trained-count and last-trained-round are
+  // seeded from the persisted cross-session record so this week continues
+  // where last week left off, rather than starting every player at 0 again.
+  const [history, setHistory] = useState(() => ({
+    ...emptyHistory(),
+    martinTrainedCount: {
+      ...martinHistory.trainedCount
+    },
+    martinLastRound: {
+      ...martinHistory.lastRound
+    }
+  }));
+  // The round-index used for Martin's "least recently trained" comparisons
+  // keeps counting up from wherever the last session left off, so it never
+  // resets to 0 and ties week-to-week the way the session-local round
+  // numbering (used for pair fairness) intentionally does.
+  const martinRoundBaseRef = useRef(martinHistory.nextRoundIndex || 0);
   const [rounds, setRounds] = useState([]);
   const [roundIdx, setRoundIdx] = useState(0);
   const [phase, setPhase] = useState("playing"); // playing | break | done
@@ -1815,7 +1846,7 @@ function SessionScreen({
       isDoubles: false,
       startTable,
       endTable,
-      roundIndex: 0,
+      roundIndex: martinRoundBaseRef.current,
       ...history
     });
     setRounds([r0]);
@@ -1845,6 +1876,15 @@ function SessionScreen({
       const finishedRound = rounds[roundIdx];
       const updatedHistory = applyRoundToHistory(finishedRound, history);
       setHistory(updatedHistory);
+      // Persist Martin's updated trained-count/last-round immediately after
+      // every round (not just at session end) — so if the session gets cut
+      // short, whoever already trained with him this week is still recorded
+      // and won't be picked again ahead of players who missed out.
+      setMartinHistory({
+        trainedCount: updatedHistory.martinTrainedCount,
+        lastRound: updatedHistory.martinLastRound,
+        nextRoundIndex: finishedRound.index + 1
+      });
       const isLast = roundIdx >= TOTAL_ROUNDS - 1;
       if (isLast) {
         setPhase("done");
@@ -1856,7 +1896,7 @@ function SessionScreen({
         isDoubles: isDoublesMode,
         startTable,
         endTable,
-        roundIndex: roundIdx + 1,
+        roundIndex: martinRoundBaseRef.current + roundIdx + 1,
         previousRound: finishedRound,
         ...updatedHistory
       });
@@ -2150,12 +2190,15 @@ function App() {
     startTable: 1,
     tableCount: 9
   });
+  const [martinHistory, setMartinHistory] = useState(emptyMartinHistory);
   useEffect(() => {
     (async () => {
       const roster = await loadStorage(ROSTER_KEY);
       if (roster) setPlayers(roster);
       const savedTables = await loadStorage(TABLE_CONFIG_KEY);
       if (savedTables) setTableConfig(savedTables);
+      const savedMartinHistory = await loadStorage(MARTIN_HISTORY_KEY);
+      if (savedMartinHistory) setMartinHistory(savedMartinHistory);
       setLoaded(true);
     })();
   }, []);
@@ -2165,6 +2208,9 @@ function App() {
   useEffect(() => {
     if (loaded) saveStorage(TABLE_CONFIG_KEY, tableConfig);
   }, [tableConfig, loaded]);
+  useEffect(() => {
+    if (loaded) saveStorage(MARTIN_HISTORY_KEY, martinHistory);
+  }, [martinHistory, loaded]);
   if (!loaded) return null;
   return /*#__PURE__*/React.createElement("div", {
     className: "ttc-root"
@@ -2181,6 +2227,8 @@ function App() {
     players: players,
     setPlayers: setPlayers,
     config: config,
+    martinHistory: martinHistory,
+    setMartinHistory: setMartinHistory,
     onEnd: () => {
       setScreen("setup");
       setConfig(null);
