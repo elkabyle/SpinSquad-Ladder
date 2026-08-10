@@ -369,19 +369,8 @@ const {
    ============================================================ */
 const ROSTER_KEY = "ttc:roster";
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
+const FAIRNESS_KEY = "ttc:fairnessHistory";
 const SESSION_KEY = "ttc:session";
-const MARTIN_HISTORY_KEY = "ttc:martinHistory";
-// Who has trained with Martin and when, carried across weeks/sessions (not
-// just within one session) so that players who missed out one week — e.g.
-// because time ran out — are first in line the next time Martin is in.
-// `nextRoundIndex` keeps climbing across every session ever run, so
-// "least recently trained" comparisons stay meaningful between weeks
-// instead of resetting to a tie every time a new session starts.
-const emptyMartinHistory = () => ({
-  trainedCount: {},
-  lastRound: {},
-  nextRoundIndex: 0
-});
 async function loadStorage(key) {
   try {
     const res = await window.storage.get(key, false);
@@ -402,6 +391,79 @@ async function clearStorage(key) {
     await window.storage.delete(key, false);
   } catch {
     /* ignore */
+  }
+}
+
+/* ============================================================
+   ATTENDANCE SYNC (Google Sheet via Apps Script Web App)
+   ============================================================
+   Paste your deployed Google Apps Script Web App URL below once you've set
+   it up (see the setup guide). Until then, this is a harmless no-op — the
+   app works exactly as before, it just won't record attendance anywhere.
+   ============================================================ */
+const ATTENDANCE_ENDPOINT_URL = "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
+function todayDateString() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Three billing categories, independent of playing Grade (skill level).
+const CATEGORIES = ["junior", "senior", "retired"];
+function categoryLabel(cat) {
+  if (cat === "junior") return "Junior";
+  if (cat === "retired") return "Retired";
+  return "Senior"; // default
+}
+function nextCategory(cat) {
+  const idx = CATEGORIES.indexOf(cat === "junior" || cat === "retired" ? cat : "senior");
+  return CATEGORIES[(idx + 1) % CATEGORIES.length];
+}
+function CategoryToggleGroup({
+  value,
+  onChange
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "ttc-toggle-group",
+    style: {
+      width: "auto"
+    }
+  }, CATEGORIES.map(cat => /*#__PURE__*/React.createElement("button", {
+    key: cat,
+    type: "button",
+    className: `ttc-toggle ${value === cat ? "active" : ""}`,
+    style: {
+      padding: "10px 14px"
+    },
+    onClick: () => onChange(cat)
+  }, categoryLabel(cat))));
+}
+function sendAttendance(presentPlayers) {
+  if (!ATTENDANCE_ENDPOINT_URL || ATTENDANCE_ENDPOINT_URL.startsWith("PASTE_")) return;
+  if (!presentPlayers.length) return;
+  const payload = {
+    date: todayDateString(),
+    players: presentPlayers.map(p => ({
+      name: p.name,
+      category: categoryLabel(p.category)
+    }))
+  };
+  try {
+    // mode: "no-cors" + text/plain avoids a CORS preflight, which Apps
+    // Script Web Apps don't handle — this is a fire-and-forget send, we
+    // can't read a response back, but the row still gets appended.
+    fetch(ATTENDANCE_ENDPOINT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8"
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    /* best effort — never block ending a session on a failed sync */
   }
 }
 
@@ -1053,6 +1115,7 @@ function RosterTab({
 }) {
   const [newName, setNewName] = useState("");
   const [newGrade, setNewGrade] = useState(1);
+  const [newCategory, setNewCategory] = useState("senior");
   const [bulkText, setBulkText] = useState("");
   const addPlayer = () => {
     const name = newName.trim();
@@ -1060,11 +1123,18 @@ function RosterTab({
     setPlayers(prev => [...prev, {
       id: uid(),
       name,
-      grade: newGrade
+      grade: newGrade,
+      category: newCategory
     }]);
     setNewName("");
   };
   const removePlayer = id => setPlayers(prev => prev.filter(p => p.id !== id));
+  const toggleCategory = id => {
+    setPlayers(prev => prev.map(p => p.id === id ? {
+      ...p,
+      category: nextCategory(p.category)
+    } : p));
+  };
   const importBulk = () => {
     const existingLower = new Set(players.map(p => p.name.toLowerCase()));
     const additions = [];
@@ -1075,10 +1145,13 @@ function RosterTab({
       const name = parts[0];
       if (!name || existingLower.has(name.toLowerCase())) return;
       const grade = parts[1] && parts[1].replace(/\D/g, "") === "2" ? 2 : 1;
+      let category = "senior";
+      if (parts[2] && /^j/i.test(parts[2])) category = "junior";else if (parts[2] && /^r/i.test(parts[2])) category = "retired";
       additions.push({
         id: uid(),
         name,
-        grade
+        grade,
+        category
       });
       existingLower.add(name.toLowerCase());
     });
@@ -1111,7 +1184,7 @@ function RosterTab({
       fontSize: 12,
       margin: "0 0 14px"
     }
-  }, "Martin's presence is toggled per-session on the Session tab — he isn't a roster entry."), players.map(p => /*#__PURE__*/React.createElement("div", {
+  }, "Martin's presence is toggled per-session on the Session tab — he isn't a roster entry, and isn't billed."), players.map(p => /*#__PURE__*/React.createElement("div", {
     key: p.id,
     className: "ttc-player-row"
   }, /*#__PURE__*/React.createElement("span", {
@@ -1127,6 +1200,14 @@ function RosterTab({
   }, /*#__PURE__*/React.createElement("span", {
     className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
   }, "Grade ", p.grade), /*#__PURE__*/React.createElement("button", {
+    className: "ttc-chip ttc-chip-resting",
+    style: {
+      border: "none",
+      cursor: "pointer"
+    },
+    onClick: () => toggleCategory(p.id),
+    title: "Tap to cycle billing category (Junior → Senior → Retired)"
+  }, categoryLabel(p.category)), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-ghost",
     style: {
       padding: "6px 10px",
@@ -1166,7 +1247,10 @@ function RosterTab({
       padding: "10px 16px"
     },
     onClick: () => setNewGrade(2)
-  }, "G2")), /*#__PURE__*/React.createElement("button", {
+  }, "G2")), /*#__PURE__*/React.createElement(CategoryToggleGroup, {
+    value: newCategory,
+    onChange: setNewCategory
+  }), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
     onClick: addPlayer
   }, "+ Add")), /*#__PURE__*/React.createElement("div", {
@@ -1183,12 +1267,12 @@ function RosterTab({
       fontSize: 12,
       marginTop: 0
     }
-  }, "One player per line: ", /*#__PURE__*/React.createElement("code", null, "Name, Grade"), " — e.g. ", /*#__PURE__*/React.createElement("code", null, "Alex, 1"), ". Grade defaults to 1 if omitted."), /*#__PURE__*/React.createElement("textarea", {
+  }, "One player per line: ", /*#__PURE__*/React.createElement("code", null, "Name, Grade, Category"), " — e.g. ", /*#__PURE__*/React.createElement("code", null, "Alex, 1, Senior"), ". Grade defaults to 1 and category to Senior if omitted (values starting with \"j\" count as Junior, \"r\" as Retired)."), /*#__PURE__*/React.createElement("textarea", {
     className: "ttc-input",
     rows: 5,
     value: bulkText,
     onChange: e => setBulkText(e.target.value),
-    placeholder: "Alex, 1\nJamie, 2\nSam, 1",
+    placeholder: "Alex, 1, Senior\nJamie, 2, Junior\nSam, 1, Retired",
     style: {
       resize: "vertical",
       fontFamily: "monospace"
@@ -1470,7 +1554,9 @@ function SetupScreen({
     }
   }, p.name), /*#__PURE__*/React.createElement("span", {
     className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
-  }, "Grade ", p.grade))))), /*#__PURE__*/React.createElement("button", {
+  }, "Grade ", p.grade), /*#__PURE__*/React.createElement("span", {
+    className: "ttc-chip ttc-chip-resting"
+  }, categoryLabel(p.category)))))), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-primary",
     style: {
       width: "100%",
@@ -1683,6 +1769,7 @@ function EditPlayersModal({
 }) {
   const [newName, setNewName] = useState("");
   const [newGrade, setNewGrade] = useState(1);
+  const [newCategory, setNewCategory] = useState("senior");
   const toggle = id => {
     setPresentIds(prev => {
       const next = new Set(prev);
@@ -1696,7 +1783,8 @@ function EditPlayersModal({
     const p = {
       id: uid(),
       name,
-      grade: newGrade
+      grade: newGrade,
+      category: newCategory
     };
     setPlayers(prev => [...prev, p]);
     setPresentIds(prev => new Set(prev).add(p.id));
@@ -1746,7 +1834,9 @@ function EditPlayersModal({
     }
   }, p.name), /*#__PURE__*/React.createElement("span", {
     className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
-  }, "Grade ", p.grade)))), /*#__PURE__*/React.createElement("div", {
+  }, "Grade ", p.grade), /*#__PURE__*/React.createElement("span", {
+    className: "ttc-chip ttc-chip-resting"
+  }, categoryLabel(p.category))))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -1779,7 +1869,10 @@ function EditPlayersModal({
       padding: "10px 16px"
     },
     onClick: () => setNewGrade(2)
-  }, "G2")), /*#__PURE__*/React.createElement("button", {
+  }, "G2")), /*#__PURE__*/React.createElement(CategoryToggleGroup, {
+    value: newCategory,
+    onChange: setNewCategory
+  }), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
     onClick: addLate
   }, "+ Add")), /*#__PURE__*/React.createElement("button", {
@@ -1795,32 +1888,26 @@ function SessionScreen({
   players,
   setPlayers,
   config,
-  martinHistory,
-  setMartinHistory,
+  fairnessHistory,
+  onPersistFairness,
   onEnd
 }) {
   const ROUND_SECONDS = (config.roundMinutes || DEFAULT_ROUND_SECONDS / 60) * 60;
   const TOTAL_ROUNDS = config.totalRounds || DEFAULT_TOTAL_ROUNDS;
   const [presentIds, setPresentIds] = useState(() => new Set(config.presentIds));
   const [isDoublesMode, setIsDoublesMode] = useState(false);
-  // Pair/rest fairness stays scoped to this session (round numbering resets
-  // to 0 below), but Martin's trained-count and last-trained-round are
-  // seeded from the persisted cross-session record so this week continues
-  // where last week left off, rather than starting every player at 0 again.
+  // Seed this session's fairness counters from the persisted lifetime
+  // totals, so "who trains with Martin next" and "who rests next" keep
+  // remembering past weeks rather than starting blank every session.
   const [history, setHistory] = useState(() => ({
     ...emptyHistory(),
     martinTrainedCount: {
-      ...martinHistory.trainedCount
+      ...(fairnessHistory?.martinCount || {})
     },
-    martinLastRound: {
-      ...martinHistory.lastRound
+    restCount: {
+      ...(fairnessHistory?.restCount || {})
     }
   }));
-  // The round-index used for Martin's "least recently trained" comparisons
-  // keeps counting up from wherever the last session left off, so it never
-  // resets to 0 and ties week-to-week the way the session-local round
-  // numbering (used for pair fairness) intentionally does.
-  const martinRoundBaseRef = useRef(martinHistory.nextRoundIndex || 0);
   const [rounds, setRounds] = useState([]);
   const [roundIdx, setRoundIdx] = useState(0);
   const [phase, setPhase] = useState("playing"); // playing | break | done
@@ -1831,10 +1918,17 @@ function SessionScreen({
   const [swapMode, setSwapMode] = useState(false);
   const [selectedForSwap, setSelectedForSwap] = useState(null);
   const initedRef = useRef(false);
+  const sessionEndedRef = useRef(false);
   const startTable = config.startTable || 1;
   const endTable = startTable + (config.tableCount || 9) - 1;
   const presentPlayers = players.filter(p => presentIds.has(p.id));
   const playersById = useMemo(() => Object.fromEntries(players.map(p => [p.id, p])), [players]);
+  const finalizeSessionOnce = useCallback(finalHistory => {
+    if (sessionEndedRef.current) return;
+    sessionEndedRef.current = true;
+    sendAttendance(presentPlayers);
+    if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount);
+  }, [presentPlayers, onPersistFairness]);
 
   // init round 1
   useEffect(() => {
@@ -1846,7 +1940,7 @@ function SessionScreen({
       isDoubles: false,
       startTable,
       endTable,
-      roundIndex: martinRoundBaseRef.current,
+      roundIndex: 0,
       ...history
     });
     setRounds([r0]);
@@ -1876,17 +1970,9 @@ function SessionScreen({
       const finishedRound = rounds[roundIdx];
       const updatedHistory = applyRoundToHistory(finishedRound, history);
       setHistory(updatedHistory);
-      // Persist Martin's updated trained-count/last-round immediately after
-      // every round (not just at session end) — so if the session gets cut
-      // short, whoever already trained with him this week is still recorded
-      // and won't be picked again ahead of players who missed out.
-      setMartinHistory({
-        trainedCount: updatedHistory.martinTrainedCount,
-        lastRound: updatedHistory.martinLastRound,
-        nextRoundIndex: finishedRound.index + 1
-      });
       const isLast = roundIdx >= TOTAL_ROUNDS - 1;
       if (isLast) {
+        finalizeSessionOnce(updatedHistory);
         setPhase("done");
         return;
       }
@@ -1896,7 +1982,7 @@ function SessionScreen({
         isDoubles: isDoublesMode,
         startTable,
         endTable,
-        roundIndex: martinRoundBaseRef.current + roundIdx + 1,
+        roundIndex: roundIdx + 1,
         previousRound: finishedRound,
         ...updatedHistory
       });
@@ -2035,7 +2121,17 @@ function SessionScreen({
     onClick: () => setShowEdit(true)
   }, "Edit players"), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-danger",
-    onClick: onEnd
+    onClick: () => {
+      // If a round was actively being played (hadn't hit its bell
+      // yet), those pairings genuinely happened — fold them in
+      // before persisting, not just whatever completed earlier.
+      let finalHistory = history;
+      if (phase === "playing" && rounds[roundIdx]) {
+        finalHistory = applyRoundToHistory(rounds[roundIdx], history);
+      }
+      finalizeSessionOnce(finalHistory);
+      onEnd();
+    }
   }, "End session"))), phase === "break" && /*#__PURE__*/React.createElement("div", {
     className: "ttc-card",
     style: {
@@ -2190,15 +2286,21 @@ function App() {
     startTable: 1,
     tableCount: 9
   });
-  const [martinHistory, setMartinHistory] = useState(emptyMartinHistory);
+  // Lifetime, cross-session fairness — who's gone longest without training
+  // with Martin, and who's rested least — so a new session doesn't forget
+  // last week and unfairly favor/disfavor the same people again.
+  const [fairnessHistory, setFairnessHistory] = useState({
+    martinCount: {},
+    restCount: {}
+  });
   useEffect(() => {
     (async () => {
       const roster = await loadStorage(ROSTER_KEY);
       if (roster) setPlayers(roster);
       const savedTables = await loadStorage(TABLE_CONFIG_KEY);
       if (savedTables) setTableConfig(savedTables);
-      const savedMartinHistory = await loadStorage(MARTIN_HISTORY_KEY);
-      if (savedMartinHistory) setMartinHistory(savedMartinHistory);
+      const savedFairness = await loadStorage(FAIRNESS_KEY);
+      if (savedFairness) setFairnessHistory(savedFairness);
       setLoaded(true);
     })();
   }, []);
@@ -2209,8 +2311,8 @@ function App() {
     if (loaded) saveStorage(TABLE_CONFIG_KEY, tableConfig);
   }, [tableConfig, loaded]);
   useEffect(() => {
-    if (loaded) saveStorage(MARTIN_HISTORY_KEY, martinHistory);
-  }, [martinHistory, loaded]);
+    if (loaded) saveStorage(FAIRNESS_KEY, fairnessHistory);
+  }, [fairnessHistory, loaded]);
   if (!loaded) return null;
   return /*#__PURE__*/React.createElement("div", {
     className: "ttc-root"
@@ -2227,8 +2329,19 @@ function App() {
     players: players,
     setPlayers: setPlayers,
     config: config,
-    martinHistory: martinHistory,
-    setMartinHistory: setMartinHistory,
+    fairnessHistory: fairnessHistory,
+    onPersistFairness: (martinCount, restCount) => {
+      setFairnessHistory(prev => ({
+        martinCount: {
+          ...prev.martinCount,
+          ...martinCount
+        },
+        restCount: {
+          ...prev.restCount,
+          ...restCount
+        }
+      }));
+    },
     onEnd: () => {
       setScreen("setup");
       setConfig(null);
