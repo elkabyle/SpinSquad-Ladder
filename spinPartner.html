@@ -367,7 +367,7 @@ const {
 /* ============================================================
    STORAGE HELPERS
    ============================================================ */
-const ROSTER_KEY = "ttc:roster";
+const ROSTER_CACHE_KEY = "ttc:rosterCache";
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const FAIRNESS_KEY = "ttc:fairnessHistory";
 const SESSION_KEY = "ttc:session";
@@ -417,28 +417,21 @@ function categoryLabel(cat) {
   if (cat === "retired") return "Retired";
   return "Senior"; // default
 }
-function nextCategory(cat) {
-  const idx = CATEGORIES.indexOf(cat === "junior" || cat === "retired" ? cat : "senior");
-  return CATEGORIES[(idx + 1) % CATEGORIES.length];
-}
-function CategoryToggleGroup({
-  value,
-  onChange
-}) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "ttc-toggle-group",
-    style: {
-      width: "auto"
-    }
-  }, CATEGORIES.map(cat => /*#__PURE__*/React.createElement("button", {
-    key: cat,
-    type: "button",
-    className: `ttc-toggle ${value === cat ? "active" : ""}`,
-    style: {
-      padding: "10px 14px"
-    },
-    onClick: () => onChange(cat)
-  }, categoryLabel(cat))));
+async function fetchRosterFromSheet() {
+  const res = await fetch(ATTENDANCE_ENDPOINT_URL);
+  if (!res.ok) throw new Error("Network response was not ok");
+  const data = await res.json();
+  return (data.players || []).map(p => ({
+    // The player's name doubles as their stable identifier — the roster
+    // now lives in the Sheet, not locally, so there's no generated uid to
+    // key on. Renaming a player in the Sheet does mean they show up as
+    // "new" for cross-session fairness tracking, which is an acceptable
+    // trade-off for how rarely that happens.
+    id: p.name,
+    name: p.name,
+    grade: p.grade === 2 ? 2 : 1,
+    category: p.category === "junior" || p.category === "retired" ? p.category : "senior"
+  }));
 }
 function sendAttendance(presentPlayers) {
   if (!ATTENDANCE_ENDPOINT_URL || ATTENDANCE_ENDPOINT_URL.startsWith("PASTE_")) return;
@@ -1109,181 +1102,157 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
 /* ============================================================
    SETUP SCREEN
    ============================================================ */
-function RosterTab({
+function CheckInPanel({
   players,
-  setPlayers
+  presentIds,
+  onToggle,
+  rosterLoading,
+  rosterError,
+  usingCache,
+  onRefresh
 }) {
-  const [newName, setNewName] = useState("");
-  const [newGrade, setNewGrade] = useState(1);
-  const [newCategory, setNewCategory] = useState("senior");
-  const [bulkText, setBulkText] = useState("");
-  const addPlayer = () => {
-    const name = newName.trim();
-    if (!name) return;
-    setPlayers(prev => [...prev, {
-      id: uid(),
-      name,
-      grade: newGrade,
-      category: newCategory
-    }]);
-    setNewName("");
-  };
-  const removePlayer = id => setPlayers(prev => prev.filter(p => p.id !== id));
-  const toggleCategory = id => {
-    setPlayers(prev => prev.map(p => p.id === id ? {
-      ...p,
-      category: nextCategory(p.category)
-    } : p));
-  };
-  const importBulk = () => {
-    const existingLower = new Set(players.map(p => p.name.toLowerCase()));
-    const additions = [];
-    bulkText.split("\n").forEach(line => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      const parts = trimmed.split(",").map(s => s.trim());
-      const name = parts[0];
-      if (!name || existingLower.has(name.toLowerCase())) return;
-      const grade = parts[1] && parts[1].replace(/\D/g, "") === "2" ? 2 : 1;
-      let category = "senior";
-      if (parts[2] && /^j/i.test(parts[2])) category = "junior";else if (parts[2] && /^r/i.test(parts[2])) category = "retired";
-      additions.push({
-        id: uid(),
-        name,
-        grade,
-        category
-      });
-      existingLower.add(name.toLowerCase());
-    });
-    if (additions.length) setPlayers(prev => [...prev, ...additions]);
-    setBulkText("");
-  };
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  const sorted = [...players].sort((a, b) => a.name.localeCompare(b.name));
+  const checkedIn = sorted.filter(p => presentIds.has(p.id));
+  const notCheckedIn = sorted.filter(p => !presentIds.has(p.id));
+  const isCheckedIn = confirmTarget ? presentIds.has(confirmTarget.id) : false;
   return /*#__PURE__*/React.createElement("div", {
     className: "ttc-card",
     style: {
       marginBottom: 18
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: "ttc-player-row",
-    style: {
-      borderColor: "var(--orange)"
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontWeight: 800
-    }
-  }, "Martin"), /*#__PURE__*/React.createElement("span", {
-    className: "ttc-chip",
-    style: {
-      background: "var(--orange-dim)",
-      color: "var(--orange)"
-    }
-  }, "Coach")), /*#__PURE__*/React.createElement("p", {
-    style: {
-      color: "var(--ink-dim)",
-      fontSize: 12,
-      margin: "0 0 14px"
-    }
-  }, "Martin's presence is toggled per-session on the Session tab — he isn't a roster entry, and isn't billed."), players.map(p => /*#__PURE__*/React.createElement("div", {
-    key: p.id,
-    className: "ttc-player-row"
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontWeight: 700
-    }
-  }, p.name), /*#__PURE__*/React.createElement("span", {
     style: {
       display: "flex",
+      justifyContent: "space-between",
       alignItems: "center",
-      gap: 10
+      flexWrap: "wrap",
+      gap: 8
     }
   }, /*#__PURE__*/React.createElement("span", {
-    className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
-  }, "Grade ", p.grade), /*#__PURE__*/React.createElement("button", {
-    className: "ttc-chip ttc-chip-resting",
+    className: "ttc-label",
     style: {
-      border: "none",
-      cursor: "pointer"
-    },
-    onClick: () => toggleCategory(p.id),
-    title: "Tap to cycle billing category (Junior → Senior → Retired)"
-  }, categoryLabel(p.category)), /*#__PURE__*/React.createElement("button", {
+      marginBottom: 0
+    }
+  }, "Players (", checkedIn.length, " checked in)"), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-ghost",
     style: {
       padding: "6px 10px",
       fontSize: 13
     },
-    onClick: () => removePlayer(p.id)
-  }, "Remove")))), /*#__PURE__*/React.createElement("div", {
+    onClick: onRefresh,
+    disabled: rosterLoading
+  }, rosterLoading ? "Refreshing…" : "Refresh list")), rosterError && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: usingCache ? "var(--orange)" : "var(--danger)",
+      fontSize: 13,
+      marginTop: 8,
+      marginBottom: 0
+    }
+  }, rosterError), checkedIn.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "var(--ink-dim)",
+      fontWeight: 700,
+      margin: "16px 0 8px",
+      textTransform: "uppercase",
+      letterSpacing: "0.06em"
+    }
+  }, "Checked in"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
+      flexWrap: "wrap",
       gap: 8,
-      marginTop: 14,
-      flexWrap: "wrap"
+      marginBottom: 6
     }
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "ttc-input",
-    placeholder: "Player name",
-    value: newName,
-    onChange: e => setNewName(e.target.value),
-    onKeyDown: e => e.key === "Enter" && addPlayer(),
+  }, checkedIn.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.id,
+    className: "ttc-chip ttc-chip-g1",
     style: {
-      flex: "1 1 180px"
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "ttc-toggle-group",
-    style: {
-      width: "auto"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${newGrade === 1 ? "active" : ""}`,
-    style: {
-      padding: "10px 16px"
+      border: "none",
+      cursor: "pointer",
+      fontSize: 14,
+      padding: "8px 14px"
     },
-    onClick: () => setNewGrade(1)
-  }, "G1"), /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${newGrade === 2 ? "active" : ""}`,
+    onClick: () => setConfirmTarget(p)
+  }, p.name)))), /*#__PURE__*/React.createElement("p", {
     style: {
-      padding: "10px 16px"
-    },
-    onClick: () => setNewGrade(2)
-  }, "G2")), /*#__PURE__*/React.createElement(CategoryToggleGroup, {
-    value: newCategory,
-    onChange: setNewCategory
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "ttc-btn",
-    onClick: addPlayer
-  }, "+ Add")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 24,
-      borderTop: "1px solid var(--line)",
-      paddingTop: 18
+      fontSize: 12,
+      color: "var(--ink-dim)",
+      fontWeight: 700,
+      margin: "16px 0 8px",
+      textTransform: "uppercase",
+      letterSpacing: "0.06em"
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "ttc-label"
-  }, "Bulk import (paste once, reuse every season)"), /*#__PURE__*/React.createElement("p", {
+  }, "Tap your name to check in"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, notCheckedIn.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.id,
+    className: "ttc-chip ttc-chip-resting",
+    style: {
+      border: "none",
+      cursor: "pointer",
+      fontSize: 14,
+      padding: "8px 14px"
+    },
+    onClick: () => setConfirmTarget(p)
+  }, p.name)), !rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
-      fontSize: 12,
-      marginTop: 0
+      fontSize: 13,
+      margin: 0
     }
-  }, "One player per line: ", /*#__PURE__*/React.createElement("code", null, "Name, Grade, Category"), " — e.g. ", /*#__PURE__*/React.createElement("code", null, "Alex, 1, Senior"), ". Grade defaults to 1 and category to Senior if omitted (values starting with \"j\" count as Junior, \"r\" as Retired)."), /*#__PURE__*/React.createElement("textarea", {
-    className: "ttc-input",
-    rows: 5,
-    value: bulkText,
-    onChange: e => setBulkText(e.target.value),
-    placeholder: "Alex, 1, Senior\nJamie, 2, Junior\nSam, 1, Retired",
+  }, "No players found — check the Players tab in the Sheet, or tap Refresh above."), rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
-      resize: "vertical",
-      fontFamily: "monospace"
+      color: "var(--ink-dim)",
+      fontSize: 13,
+      margin: 0
     }
-  }), /*#__PURE__*/React.createElement("button", {
+  }, "Loading players…")), confirmTarget && /*#__PURE__*/React.createElement("div", {
+    className: "ttc-modal-backdrop",
+    onClick: () => setConfirmTarget(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ttc-modal",
+    style: {
+      maxWidth: 360,
+      textAlign: "center"
+    },
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "ttc-display",
+    style: {
+      fontSize: 26,
+      margin: "0 0 14px"
+    }
+  }, isCheckedIn ? "Leaving?" : "Join in?"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      marginBottom: 20
+    }
+  }, isCheckedIn ? `${confirmTarget.name}, tap Confirm to check out of today's session.` : `${confirmTarget.name}, tap Confirm to check in to today's session.`), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "ttc-btn",
+    style: {
+      flex: 1
+    },
+    onClick: () => setConfirmTarget(null)
+  }, "Cancel"), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-primary",
     style: {
-      marginTop: 10
+      flex: 1
     },
-    onClick: importBulk
-  }, "Import list")));
+    onClick: () => {
+      onToggle(confirmTarget.id);
+      setConfirmTarget(null);
+    }
+  }, "Confirm")))));
 }
 const SESSION_MINUTES = 120;
 const ROUND_MINUTE_OPTIONS = [10, 12, 15, 20, 25, 30];
@@ -1359,14 +1328,17 @@ function Stepper({
 }
 function SetupScreen({
   players,
-  setPlayers,
   tableConfig,
   setTableConfig,
+  presentIds,
+  onTogglePresent,
+  rosterLoading,
+  rosterError,
+  usingCache,
+  onRefreshRoster,
   onStart
 }) {
-  const [tab, setTab] = useState("session");
   const [martinPresent, setMartinPresent] = useState(true);
-  const [presentIds, setPresentIds] = useState(() => new Set());
   const [roundMinutes, setRoundMinutes] = useState(15);
   const [roundMinutesTouched, setRoundMinutesTouched] = useState(false);
   const {
@@ -1374,13 +1346,6 @@ function SetupScreen({
     tableCount
   } = tableConfig;
   const endTable = startTable + tableCount - 1;
-  const togglePresent = id => {
-    setPresentIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);else next.add(id);
-      return next;
-    });
-  };
   const presentCount = presentIds.size;
   const canStart = presentCount >= 2;
   const totalRounds = Math.max(2, Math.round(SESSION_MINUTES / roundMinutes));
@@ -1405,21 +1370,7 @@ function SetupScreen({
       marginTop: 0,
       marginBottom: 18
     }
-  }, "Set today's table count, mark who's here, then start the first round."), /*#__PURE__*/React.createElement("div", {
-    className: "ttc-toggle-group",
-    style: {
-      marginBottom: 18
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${tab === "session" ? "active" : ""}`,
-    onClick: () => setTab("session")
-  }, "Today's session"), /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${tab === "roster" ? "active" : ""}`,
-    onClick: () => setTab("roster")
-  }, "Manage roster (", players.length, ")")), tab === "roster" && /*#__PURE__*/React.createElement(RosterTab, {
-    players: players,
-    setPlayers: setPlayers
-  }), tab === "session" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Players check themselves in below, then start the first round when ready."), /*#__PURE__*/React.createElement("div", {
     className: "ttc-card",
     style: {
       marginBottom: 18
@@ -1483,7 +1434,7 @@ function SetupScreen({
       marginTop: 0,
       marginBottom: 12
     }
-  }, "Suggested automatically from how many players are checked below — fewer players means longer, less frequent rounds so pairings don't run out of variety and repeat too soon. Override anytime."), /*#__PURE__*/React.createElement("div", {
+  }, "Suggested automatically from how many players have checked in below — fewer players means longer, less frequent rounds so pairings don't run out of variety and repeat too soon. Override anytime."), /*#__PURE__*/React.createElement("div", {
     className: "ttc-toggle-group",
     style: {
       flexWrap: "wrap"
@@ -1506,57 +1457,15 @@ function SetupScreen({
       marginTop: 12,
       marginBottom: 0
     }
-  }, totalRounds, " rounds × ", roundMinutes, " min ≈ ", totalRounds * roundMinutes, " min session")), /*#__PURE__*/React.createElement("div", {
-    className: "ttc-card",
-    style: {
-      marginBottom: 18
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "baseline",
-      marginBottom: 14
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "ttc-label",
-    style: {
-      marginBottom: 0
-    }
-  }, "Who's here today? (", presentCount, " selected)")), players.length === 0 && /*#__PURE__*/React.createElement("p", {
-    style: {
-      color: "var(--ink-dim)",
-      fontSize: 14
-    }
-  }, "No players in the roster yet — switch to \"Manage roster\" to add or bulk-import your player list."), players.map(p => /*#__PURE__*/React.createElement("div", {
-    key: p.id,
-    className: `ttc-player-row ${presentIds.has(p.id) ? "present" : ""}`
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 12,
-      cursor: "pointer",
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: presentIds.has(p.id),
-    onChange: () => togglePresent(p.id),
-    style: {
-      width: 20,
-      height: 20,
-      accentColor: "var(--orange)"
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontWeight: 700
-    }
-  }, p.name), /*#__PURE__*/React.createElement("span", {
-    className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
-  }, "Grade ", p.grade), /*#__PURE__*/React.createElement("span", {
-    className: "ttc-chip ttc-chip-resting"
-  }, categoryLabel(p.category)))))), /*#__PURE__*/React.createElement("button", {
+  }, totalRounds, " rounds × ", roundMinutes, " min ≈ ", totalRounds * roundMinutes, " min session")), /*#__PURE__*/React.createElement(CheckInPanel, {
+    players: players,
+    presentIds: presentIds,
+    onToggle: onTogglePresent,
+    rosterLoading: rosterLoading,
+    rosterError: rosterError,
+    usingCache: usingCache,
+    onRefresh: onRefreshRoster
+  }), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-primary",
     style: {
       width: "100%",
@@ -1568,11 +1477,10 @@ function SetupScreen({
       startTable,
       tableCount,
       martinPresent,
-      presentIds: Array.from(presentIds),
       roundMinutes,
       totalRounds
     })
-  }, canStart ? "Start session — Round 1" : "Select at least 2 players to start")));
+  }, canStart ? "Start Session — Round 1" : "At least 2 players need to check in first"));
 }
 
 /* ============================================================
@@ -1760,36 +1668,16 @@ function MartinCard({
     onPlayerClick: onPlayerClick
   }) : "—")));
 }
-function EditPlayersModal({
+function CheckInModal({
   players,
   presentIds,
-  setPresentIds,
-  setPlayers,
+  onToggle,
+  rosterLoading,
+  rosterError,
+  usingCache,
+  onRefreshRoster,
   onClose
 }) {
-  const [newName, setNewName] = useState("");
-  const [newGrade, setNewGrade] = useState(1);
-  const [newCategory, setNewCategory] = useState("senior");
-  const toggle = id => {
-    setPresentIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);else next.add(id);
-      return next;
-    });
-  };
-  const addLate = () => {
-    const name = newName.trim();
-    if (!name) return;
-    const p = {
-      id: uid(),
-      name,
-      grade: newGrade,
-      category: newCategory
-    };
-    setPlayers(prev => [...prev, p]);
-    setPresentIds(prev => new Set(prev).add(p.id));
-    setNewName("");
-  };
   return /*#__PURE__*/React.createElement("div", {
     className: "ttc-modal-backdrop",
     onClick: onClose
@@ -1802,99 +1690,44 @@ function EditPlayersModal({
       fontSize: 26,
       margin: "0 0 4px"
     }
-  }, "EDIT WHO'S PLAYING"), /*#__PURE__*/React.createElement("p", {
+  }, "CHECK IN / OUT"), /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13,
-      marginTop: 0
+      marginTop: 0,
+      marginBottom: 14
     }
-  }, "Changes apply from the next round onward. The current round in progress won't change."), players.map(p => /*#__PURE__*/React.createElement("div", {
-    key: p.id,
-    className: `ttc-player-row ${presentIds.has(p.id) ? "present" : ""}`
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: 12,
-      cursor: "pointer",
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: presentIds.has(p.id),
-    onChange: () => toggle(p.id),
-    style: {
-      width: 20,
-      height: 20,
-      accentColor: "var(--orange)"
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontWeight: 700
-    }
-  }, p.name), /*#__PURE__*/React.createElement("span", {
-    className: `ttc-chip ${p.grade === 1 ? "ttc-chip-g1" : "ttc-chip-g2"}`
-  }, "Grade ", p.grade), /*#__PURE__*/React.createElement("span", {
-    className: "ttc-chip ttc-chip-resting"
-  }, categoryLabel(p.category))))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      marginTop: 14,
-      flexWrap: "wrap"
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "ttc-input",
-    placeholder: "Late arrival name",
-    value: newName,
-    onChange: e => setNewName(e.target.value),
-    onKeyDown: e => e.key === "Enter" && addLate(),
-    style: {
-      flex: "1 1 160px"
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "ttc-toggle-group",
-    style: {
-      width: "auto"
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${newGrade === 1 ? "active" : ""}`,
-    style: {
-      padding: "10px 16px"
-    },
-    onClick: () => setNewGrade(1)
-  }, "G1"), /*#__PURE__*/React.createElement("button", {
-    className: `ttc-toggle ${newGrade === 2 ? "active" : ""}`,
-    style: {
-      padding: "10px 16px"
-    },
-    onClick: () => setNewGrade(2)
-  }, "G2")), /*#__PURE__*/React.createElement(CategoryToggleGroup, {
-    value: newCategory,
-    onChange: setNewCategory
+  }, "Changes apply from the next round onward. The current round in progress won't change."), /*#__PURE__*/React.createElement(CheckInPanel, {
+    players: players,
+    presentIds: presentIds,
+    onToggle: onToggle,
+    rosterLoading: rosterLoading,
+    rosterError: rosterError,
+    usingCache: usingCache,
+    onRefresh: onRefreshRoster
   }), /*#__PURE__*/React.createElement("button", {
-    className: "ttc-btn",
-    onClick: addLate
-  }, "+ Add")), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-primary",
     style: {
-      width: "100%",
-      marginTop: 18
+      width: "100%"
     },
     onClick: onClose
   }, "Done")));
 }
 function SessionScreen({
   players,
-  setPlayers,
   config,
+  presentIds,
+  onTogglePresent,
   fairnessHistory,
   onPersistFairness,
+  rosterLoading,
+  rosterError,
+  usingCache,
+  onRefreshRoster,
   onEnd
 }) {
   const ROUND_SECONDS = (config.roundMinutes || DEFAULT_ROUND_SECONDS / 60) * 60;
   const TOTAL_ROUNDS = config.totalRounds || DEFAULT_TOTAL_ROUNDS;
-  const [presentIds, setPresentIds] = useState(() => new Set(config.presentIds));
   const [isDoublesMode, setIsDoublesMode] = useState(false);
   // Seed this session's fairness counters from the persisted lifetime
   // totals, so "who trains with Martin next" and "who rests next" keep
@@ -2119,7 +1952,7 @@ function SessionScreen({
   }, swapMode ? selectedForSwap ? "Tap their swap partner…" : "Swap: tap a player" : "Swap players"), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
     onClick: () => setShowEdit(true)
-  }, "Edit players"), /*#__PURE__*/React.createElement("button", {
+  }, "Check in/out"), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn ttc-btn-danger",
     onClick: () => {
       // If a round was actively being played (hadn't hit its bell
@@ -2265,11 +2098,14 @@ function SessionScreen({
     selectedId: selectedForSwap,
     onPlayerClick: handlePlayerClick,
     className: "ttc-chip ttc-chip-resting"
-  })))), showEdit && /*#__PURE__*/React.createElement(EditPlayersModal, {
+  })))), showEdit && /*#__PURE__*/React.createElement(CheckInModal, {
     players: players,
     presentIds: presentIds,
-    setPresentIds: setPresentIds,
-    setPlayers: setPlayers,
+    onToggle: onTogglePresent,
+    rosterLoading: rosterLoading,
+    rosterError: rosterError,
+    usingCache: usingCache,
+    onRefreshRoster: onRefreshRoster,
     onClose: () => setShowEdit(false)
   }));
 }
@@ -2279,9 +2115,13 @@ function SessionScreen({
    ============================================================ */
 function App() {
   const [players, setPlayers] = useState([]);
+  const [presentIds, setPresentIds] = useState(() => new Set());
   const [screen, setScreen] = useState("setup");
   const [config, setConfig] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [rosterLoading, setRosterLoading] = useState(true);
+  const [rosterError, setRosterError] = useState(null);
+  const [usingCache, setUsingCache] = useState(false);
   const [tableConfig, setTableConfig] = useState({
     startTable: 1,
     tableCount: 9
@@ -2293,20 +2133,45 @@ function App() {
     martinCount: {},
     restCount: {}
   });
+  const loadRoster = useCallback(async () => {
+    setRosterLoading(true);
+    setRosterError(null);
+    try {
+      const fresh = await fetchRosterFromSheet();
+      setPlayers(fresh);
+      setUsingCache(false);
+      saveStorage(ROSTER_CACHE_KEY, fresh);
+    } catch (err) {
+      const cached = await loadStorage(ROSTER_CACHE_KEY);
+      if (cached && cached.length) {
+        setPlayers(cached);
+        setUsingCache(true);
+        setRosterError("Couldn't reach the player list — showing a saved copy from last time.");
+      } else {
+        setRosterError("Couldn't load the player list, and there's no saved copy yet. Check the connection and tap Refresh.");
+      }
+    } finally {
+      setRosterLoading(false);
+    }
+  }, []);
+  const togglePresent = useCallback(id => {
+    setPresentIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);else next.add(id);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     (async () => {
-      const roster = await loadStorage(ROSTER_KEY);
-      if (roster) setPlayers(roster);
       const savedTables = await loadStorage(TABLE_CONFIG_KEY);
       if (savedTables) setTableConfig(savedTables);
       const savedFairness = await loadStorage(FAIRNESS_KEY);
       if (savedFairness) setFairnessHistory(savedFairness);
+      await loadRoster();
       setLoaded(true);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    if (loaded) saveStorage(ROSTER_KEY, players);
-  }, [players, loaded]);
   useEffect(() => {
     if (loaded) saveStorage(TABLE_CONFIG_KEY, tableConfig);
   }, [tableConfig, loaded]);
@@ -2314,11 +2179,19 @@ function App() {
     if (loaded) saveStorage(FAIRNESS_KEY, fairnessHistory);
   }, [fairnessHistory, loaded]);
   if (!loaded) return null;
+  const rosterProps = {
+    players,
+    presentIds,
+    onTogglePresent: togglePresent,
+    rosterLoading,
+    rosterError,
+    usingCache,
+    onRefreshRoster: loadRoster
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: "ttc-root"
   }, /*#__PURE__*/React.createElement(GlobalStyle, null), screen === "setup" && /*#__PURE__*/React.createElement(SetupScreen, {
-    players: players,
-    setPlayers: setPlayers,
+    ...rosterProps,
     tableConfig: tableConfig,
     setTableConfig: setTableConfig,
     onStart: cfg => {
@@ -2326,8 +2199,7 @@ function App() {
       setScreen("session");
     }
   }), screen === "session" && config && /*#__PURE__*/React.createElement(SessionScreen, {
-    players: players,
-    setPlayers: setPlayers,
+    ...rosterProps,
     config: config,
     fairnessHistory: fairnessHistory,
     onPersistFairness: (martinCount, restCount) => {
