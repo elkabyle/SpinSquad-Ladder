@@ -2181,6 +2181,16 @@ function SessionScreen({
   const endTable = startTable + (config.tableCount || 9) - 1;
   const presentPlayers = players.filter(p => presentIds.has(p.id));
   const playersById = useMemo(() => Object.fromEntries(players.map(p => [p.id, p])), [players]);
+  // presentIds only reflects who's checked in RIGHT NOW — checking out
+  // removes someone from it, which used to mean anyone who left early
+  // vanished from the final attendance record entirely. This tracks
+  // everyone who was EVER checked in during the session (additive only,
+  // never shrinks), so the end-of-session summary and the Sheet sync
+  // still include early leavers.
+  const everPresentIdsRef = useRef(new Set());
+  useEffect(() => {
+    presentIds.forEach(id => everPresentIdsRef.current.add(id));
+  }, [presentIds]);
   // Shown every time a session ends (voluntarily via "End session" or by
   // finishing all rounds), regardless of whether the background sync to
   // the Sheet succeeded — that can't be reliably detected from here. Null
@@ -2189,16 +2199,17 @@ function SessionScreen({
   const finalizeSessionOnce = useCallback(finalHistory => {
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
-    sendAttendance(presentPlayers);
+    const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id));
+    sendAttendance(attendedPlayers);
     if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount);
     setSessionSummary({
       date: todayDateString(),
-      players: presentPlayers.map(p => ({
+      players: attendedPlayers.map(p => ({
         name: p.name,
         category: categoryLabel(p.category)
       }))
     });
-  }, [presentPlayers, onPersistFairness]);
+  }, [players, onPersistFairness]);
 
   // init round 1
   useEffect(() => {
