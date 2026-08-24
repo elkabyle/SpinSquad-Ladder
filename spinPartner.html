@@ -1883,7 +1883,7 @@ function SessionRosterPanel({
   }, offTable.map(p => /*#__PURE__*/React.createElement("button", {
     key: p.id,
     type: "button",
-    className: `ttc-chip ttc-chip-resting ${heldPlayerId === p.id ? "held" : ""}`,
+    className: `ttc-chip ttc-chip-g1 ${heldPlayerId === p.id ? "held" : ""}`,
     style: {
       border: "none",
       cursor: "pointer",
@@ -1908,7 +1908,7 @@ function SessionRosterPanel({
   }, notCheckedIn.map(p => /*#__PURE__*/React.createElement("button", {
     key: p.id,
     type: "button",
-    className: "ttc-chip",
+    className: "ttc-chip ttc-chip-resting",
     style: {
       border: "none",
       cursor: "pointer",
