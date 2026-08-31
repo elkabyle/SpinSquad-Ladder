@@ -366,6 +366,7 @@ const ROSTER_CACHE_KEY = "ttc:rosterCache";
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const FAIRNESS_KEY = "ttc:fairnessHistory";
 const SESSION_KEY = "ttc:session";
+const ZOOM_KEY = "social:zoomed";
 async function loadStorage(key) {
   try {
     const res = await window.storage.get(key, false);
@@ -425,17 +426,20 @@ async function fetchRosterFromSheet() {
     id: p.name,
     name: p.name,
     grade: p.grade === 2 ? 2 : 1,
-    category: p.category === "junior" || p.category === "retired" ? p.category : "senior"
+    category: p.category === "junior" || p.category === "retired" ? p.category : "senior",
+    keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None"
   }));
 }
-function sendAttendance(presentPlayers) {
+function sendAttendance(presentPlayers, martinPresent) {
   if (!ATTENDANCE_ENDPOINT_URL || ATTENDANCE_ENDPOINT_URL.startsWith("PASTE_")) return;
   if (!presentPlayers.length) return;
   const payload = {
     date: todayDateString(),
+    martinPresent: !!martinPresent,
     players: presentPlayers.map(p => ({
       name: p.name,
-      category: categoryLabel(p.category)
+      category: categoryLabel(p.category),
+      keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None"
     }))
   };
   try {
@@ -1000,6 +1004,14 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     }
     .ttc-root *, .ttc-root *::before, .ttc-root *::after { box-sizing: border-box; }
     .ttc-display { font-family: 'Bebas Neue', 'Inter', sans-serif; letter-spacing: 0.03em; }
+    .ttc-zoom-toggle {
+      font-family: 'Inter', sans-serif; font-weight: 800; font-size: 15px;
+      border-radius: 10px; border: 2px solid #f5d90a;
+      background: #171d28; color: #f5d90a;
+      padding: 8px 14px; cursor: pointer; line-height: 1;
+      white-space: nowrap;
+    }
+    .ttc-zoom-toggle:active { transform: scale(0.96); }
 
     .ttc-btn {
       font-family: 'Inter', sans-serif;
@@ -1062,8 +1074,8 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     }
     .ttc-table-card.martin { border-color: var(--orange); background: linear-gradient(160deg, var(--orange-dim), var(--bg-panel) 60%); }
     .ttc-table-num {
-      font-family: 'Bebas Neue', sans-serif; font-size: 34px; color: var(--ink-dim);
-      position: absolute; top: 14px; right: 18px; opacity: 0.5;
+      font-family: 'Bebas Neue', sans-serif; font-size: 34px; color: #f5d90a;
+      position: absolute; top: 14px; right: 18px; opacity: 1;
     }
     .ttc-table-card.martin .ttc-table-num { color: var(--orange); opacity: 0.9; }
     .ttc-table-num-btn {
@@ -1300,6 +1312,23 @@ function suggestRoundMinutes(playerCount) {
   if (playerCount <= 15) return 12;
   return 10;
 }
+/**
+ * Small inline button used next to a heading on each page — tapping it
+ * doubles (or restores) the size of the whole interface via the "zoom"
+ * on the app root, for anyone who needs bigger text/buttons to read the
+ * board comfortably from a normal seated distance.
+ */
+function ZoomToggle({
+  zoomed,
+  onToggleZoom
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "ttc-zoom-toggle",
+    onClick: onToggleZoom,
+    title: zoomed ? "Switch back to normal size" : "Make everything bigger"
+  }, zoomed ? "🔍 Zoom: ON" : "🔍 Zoom");
+}
 function Stepper({
   label,
   value,
@@ -1368,6 +1397,8 @@ function SetupScreen({
   rosterError,
   usingCache,
   onRefreshRoster,
+  zoomed,
+  onToggleZoom,
   onStart
 }) {
   const [martinPresent, setMartinPresent] = useState(true);
@@ -1390,13 +1421,23 @@ function SetupScreen({
       maxWidth: 720,
       margin: "0 auto"
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 14,
+      margin: "0 0 4px"
+    }
   }, /*#__PURE__*/React.createElement("h1", {
     className: "ttc-display",
     style: {
       fontSize: 40,
-      margin: "0 0 4px"
+      margin: 0
     }
-  }, "SESSION SETUP"), /*#__PURE__*/React.createElement("p", {
+  }, "SESSION SETUP"), /*#__PURE__*/React.createElement(ZoomToggle, {
+    zoomed: zoomed,
+    onToggleZoom: onToggleZoom
+  })), /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       marginTop: 0,
@@ -2070,6 +2111,8 @@ function SessionScreen({
   rosterError,
   usingCache,
   onRefreshRoster,
+  zoomed,
+  onToggleZoom,
   onEnd
 }) {
   // Round length used to be a fixed const derived from setup config; now
@@ -2200,7 +2243,7 @@ function SessionScreen({
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
     const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id));
-    sendAttendance(attendedPlayers);
+    sendAttendance(attendedPlayers, config.martinPresent);
     if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount);
     setSessionSummary({
       date: todayDateString(),
@@ -2209,7 +2252,7 @@ function SessionScreen({
         category: categoryLabel(p.category)
       }))
     });
-  }, [players, onPersistFairness]);
+  }, [players, onPersistFairness, config.martinPresent]);
 
   // init round 1
   useEffect(() => {
@@ -2601,7 +2644,10 @@ function SessionScreen({
       cursor: "pointer",
       color: secondsLeft <= 30 ? "var(--danger)" : secondsLeft <= 120 ? "var(--orange)" : "var(--ink-dim)"
     }
-  }, Math.floor(secondsLeft / 60), ":", (secondsLeft % 60).toString().padStart(2, "0"))), /*#__PURE__*/React.createElement("div", {
+  }, Math.floor(secondsLeft / 60), ":", (secondsLeft % 60).toString().padStart(2, "0")), /*#__PURE__*/React.createElement(ZoomToggle, {
+    zoomed: zoomed,
+    onToggleZoom: onToggleZoom
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -2797,6 +2843,7 @@ function App() {
     martinCount: {},
     restCount: {}
   });
+  const [zoomed, setZoomed] = useState(false);
   const loadRoster = useCallback(async () => {
     setRosterLoading(true);
     setRosterError(null);
@@ -2831,6 +2878,8 @@ function App() {
       if (savedTables) setTableConfig(savedTables);
       const savedFairness = await loadStorage(FAIRNESS_KEY);
       if (savedFairness) setFairnessHistory(savedFairness);
+      const savedZoom = await loadStorage(ZOOM_KEY);
+      if (savedZoom) setZoomed(true);
       await loadRoster();
       setLoaded(true);
     })();
@@ -2842,6 +2891,9 @@ function App() {
   useEffect(() => {
     if (loaded) saveStorage(FAIRNESS_KEY, fairnessHistory);
   }, [fairnessHistory, loaded]);
+  useEffect(() => {
+    if (loaded) saveStorage(ZOOM_KEY, zoomed);
+  }, [zoomed, loaded]);
   if (!loaded) return null;
   const rosterProps = {
     players,
@@ -2852,10 +2904,18 @@ function App() {
     usingCache,
     onRefreshRoster: loadRoster
   };
+  const zoomProps = {
+    zoomed,
+    onToggleZoom: () => setZoomed(z => !z)
+  };
   return /*#__PURE__*/React.createElement("div", {
-    className: "ttc-root"
+    className: "ttc-root",
+    style: {
+      zoom: zoomed ? 2 : 1
+    }
   }, /*#__PURE__*/React.createElement(GlobalStyle, null), screen === "setup" && /*#__PURE__*/React.createElement(SetupScreen, {
     ...rosterProps,
+    ...zoomProps,
     tableConfig: tableConfig,
     setTableConfig: setTableConfig,
     onStart: cfg => {
@@ -2864,6 +2924,7 @@ function App() {
     }
   }), screen === "session" && config && /*#__PURE__*/React.createElement(SessionScreen, {
     ...rosterProps,
+    ...zoomProps,
     config: config,
     fairnessHistory: fairnessHistory,
     onPersistFairness: (martinCount, restCount) => {
