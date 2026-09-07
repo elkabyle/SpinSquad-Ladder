@@ -363,6 +363,15 @@ const {
    STORAGE HELPERS
    ============================================================ */
 const ROSTER_CACHE_KEY = "ttc:rosterCache";
+// Bump this whenever a field is added to the roster shape (fetchRosterFromSheet's
+// mapping) that fee/round logic depends on being present — e.g. keyStatus.
+// A cached roster saved under an older version is treated as unusable rather
+// than silently falling back with that field missing, which is exactly how a
+// rarely-used device with a months-old cache ended up billing every key
+// holder as a full-fee payer: the fetch failed, it fell back to a cache from
+// before keyStatus existed, and every player's missing keyStatus quietly
+// defaulted to "None".
+const ROSTER_CACHE_VERSION = 2;
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const FAIRNESS_KEY = "ttc:fairnessHistory";
 const SESSION_KEY = "ttc:session";
@@ -708,6 +717,22 @@ function splitTeams(quad, pairHistory, pairLastRound, prevPairsSet) {
   });
   return best;
 }
+// Every peer table number in the FULL visible range — 1 through endTable
+// — excluding Martin's fixed slot (startTable) when he's present. Tables
+// below startTable are included here too: "Start counting from table #"
+// only sets which tables start out pre-retired by default, it doesn't
+// remove lower-numbered tables from existing at all, so they can always
+// be brought into rotation later if needed. Used consistently by round
+// generation, the board, and both the Setup and in-session table lists,
+// so none of them can drift out of sync with each other.
+function peerTableNumbers(startTable, endTable, martinPresent) {
+  const numbers = [];
+  for (let t = 1; t <= endTable; t++) {
+    if (martinPresent && t === startTable) continue;
+    numbers.push(t);
+  }
+  return numbers;
+}
 function generateRound({
   presentPlayers,
   martinPresent,
@@ -777,11 +802,10 @@ function generateRound({
     }));
   }
   const orderedMatches = shuffled(matches);
-  const peerTableStart = martinPresent ? startTable + 1 : startTable;
   const peerTables = [];
-  for (let t = peerTableStart; t <= endTable; t++) {
+  peerTableNumbers(startTable, endTable, martinPresent).forEach(t => {
     if (!retiredTables || !retiredTables.has(t)) peerTables.push(t);
-  }
+  });
   orderedMatches.forEach((m, idx) => {
     m.table = peerTables[idx] ?? null;
   });
@@ -872,8 +896,7 @@ function buildBoardSlots(round, martinPresent, startTable, endTable, retiredTabl
       ids: round.martinTrainee ? [MARTIN_ID, round.martinTrainee] : [MARTIN_ID]
     });
   }
-  const peerStart = martinPresent ? startTable + 1 : startTable;
-  for (let t = peerStart; t <= endTable; t++) {
+  peerTableNumbers(startTable, endTable, martinPresent).forEach(t => {
     const match = round.matches.find(m => m.table === t);
     const isRetired = !!(retiredTables && retiredTables.has(t));
     slots.push({
@@ -884,7 +907,7 @@ function buildBoardSlots(round, martinPresent, startTable, endTable, retiredTabl
       capacity: isRetired ? 0 : 4,
       ids: match ? [...match.ids] : []
     });
-  }
+  });
   return slots;
 }
 
@@ -993,6 +1016,8 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
       --grade2: #5b9ee0;
       --grade2-dim: #182c40;
       --danger: #ef5b5b;
+      --table-active: #f5d90a;
+      --table-retired: #3d3606;
       font-family: 'Inter', sans-serif;
       background: var(--bg);
       color: var(--ink);
@@ -1065,7 +1090,7 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     }
     .ttc-table-card.martin { border-color: var(--orange); background: linear-gradient(160deg, var(--orange-dim), var(--bg-panel) 60%); }
     .ttc-table-num {
-      font-family: 'Bebas Neue', sans-serif; font-size: 48px; color: #f5d90a;
+      font-family: 'Bebas Neue', sans-serif; font-size: 48px; color: var(--table-active);
       position: absolute; top: 14px; right: 18px; opacity: 1;
     }
     .ttc-table-card.martin .ttc-table-num { color: var(--orange); opacity: 0.9; }
@@ -1076,9 +1101,9 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     .ttc-table-card-retired {
       display: block; width: 100%; text-align: left; cursor: pointer;
       background: var(--bg-panel); border: 1px dashed var(--line); border-radius: 20px;
-      padding: 64px 20px 20px 20px; position: relative; opacity: 0.55; min-height: 110px;
+      padding: 64px 20px 20px 20px; position: relative; min-height: 110px;
     }
-    .ttc-table-card-retired:hover { opacity: 0.8; border-color: var(--orange); }
+    .ttc-table-card-retired:hover { border-color: var(--orange); }
     .ttc-table-retired-label {
       margin-top: 4px; font-size: 13px; color: var(--ink-dim); font-style: italic;
     }
@@ -1179,7 +1204,9 @@ function CheckInPanel({
     disabled: rosterLoading
   }, rosterLoading ? "Refreshing…" : "Refresh list")), rosterError && /*#__PURE__*/React.createElement("p", {
     style: {
-      color: usingCache ? "var(--orange)" : "var(--danger)",
+      color: "#ff0000",
+      fontWeight: 800,
+      textTransform: "uppercase",
       fontSize: 13,
       marginTop: 8,
       marginBottom: 0
@@ -1303,6 +1330,35 @@ function suggestRoundMinutes(playerCount) {
   if (playerCount <= 15) return 12;
   return 10;
 }
+/**
+ * A single table's toggle chip — used in both the Setup screen and the
+ * in-session sidebar, so the two always look and behave identically.
+ * Color-coded the same way as the large table card's own title (bright
+ * yellow = in use, dark yellow = not in use) rather than a strikethrough,
+ * which read as a second, slightly different signal for the same thing.
+ */
+function TableToggleChip({
+  tableNum,
+  isRetired,
+  onToggle
+}) {
+  const color = isRetired ? "var(--table-retired)" : "var(--table-active)";
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => onToggle(tableNum),
+    title: isRetired ? "Tap to bring this table back into rotation" : "Tap to mark this table not in use today",
+    style: {
+      border: `1px solid ${color}`,
+      borderRadius: 8,
+      cursor: "pointer",
+      fontSize: 13,
+      fontWeight: 700,
+      padding: "6px 12px",
+      background: "var(--bg-panel)",
+      color: color
+    }
+  }, `Table ${tableNum}`);
+}
 function Stepper({
   label,
   value,
@@ -1381,6 +1437,28 @@ function SetupScreen({
     tableCount
   } = tableConfig;
   const endTable = startTable + tableCount - 1;
+  // Tables marked "not in use" before the session even starts — e.g. a
+  // table too close to a wall, decided while doing headcount, before
+  // there's any round or board to click on yet. Carried into the
+  // session's own retiredTables state via onStart below, rather than
+  // that always starting empty regardless of anything decided here.
+  const [retiredTables, setRetiredTables] = useState(() => new Set());
+  // "Start counting from table #" only sets a DEFAULT for which tables
+  // begin pre-retired (below that number) — it doesn't remove them from
+  // existing entirely, so they stay fully toggleable afterward. Whenever
+  // the starting number changes, the default resets to match it.
+  useEffect(() => {
+    const defaults = new Set();
+    for (let t = 1; t < startTable; t++) defaults.add(t);
+    setRetiredTables(defaults);
+  }, [startTable]);
+  const handleToggleTableRetired = tableNum => {
+    setRetiredTables(prev => {
+      const next = new Set(prev);
+      if (next.has(tableNum)) next.delete(tableNum);else next.add(tableNum);
+      return next;
+    });
+  };
   const presentCount = presentIds.size;
   const canStart = presentCount >= 2;
   const totalRounds = Math.max(2, Math.round(SESSION_MINUTES / roundMinutes));
@@ -1442,7 +1520,26 @@ function SetupScreen({
       marginTop: 14,
       marginBottom: 0
     }
-  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", martinPresent ? " — Martin takes the first one" : ""), /*#__PURE__*/React.createElement("span", {
+  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", martinPresent ? " — Martin takes the first one" : ""), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 12,
+      marginTop: 14,
+      marginBottom: 6
+    }
+  }, "Tap any table to mark it not in use today — you can change this any time, including once the session's running."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      marginBottom: 4
+    }
+  }, peerTableNumbers(startTable, endTable, martinPresent).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+    key: t,
+    tableNum: t,
+    isRetired: retiredTables.has(t),
+    onToggle: handleToggleTableRetired
+  }))), /*#__PURE__*/React.createElement("span", {
     className: "ttc-label",
     style: {
       marginTop: 20
@@ -1513,7 +1610,8 @@ function SetupScreen({
       tableCount,
       martinPresent,
       roundMinutes,
-      totalRounds
+      totalRounds,
+      retiredTables: [...retiredTables]
     })
   }, canStart ? "Start Session — Round 1" : "At least 2 players need to check in first"));
 }
@@ -1606,7 +1704,10 @@ function SlotBoardCard({
       onClick: () => onToggleTableRetired(slot.table),
       title: "Tap to bring this table back into rotation"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "ttc-table-num"
+      className: "ttc-table-num",
+      style: {
+        color: "var(--table-retired)"
+      }
     }, `Table ${slot.table}`), /*#__PURE__*/React.createElement("div", {
       className: "ttc-table-retired-label"
     }, "Not in use — tap to reactivate"));
@@ -1823,7 +1924,14 @@ function SessionRosterPanel({
   rosterLoading,
   rosterError,
   usingCache,
-  onRefreshRoster
+  onRefreshRoster,
+  martinPresent,
+  startTable,
+  endTable,
+  retiredTables,
+  onToggleTableRetired,
+  onAddTable,
+  onRemoveTable
 }) {
   const sorted = [...players].sort((a, b) => a.name.localeCompare(b.name));
   const offTable = sorted.filter(p => presentIds.has(p.id) && !onBoardIds.has(p.id));
@@ -1851,7 +1959,9 @@ function SessionRosterPanel({
     disabled: rosterLoading
   }, rosterLoading ? "Refreshing…" : "Refresh")), rosterError && /*#__PURE__*/React.createElement("p", {
     style: {
-      color: usingCache ? "var(--orange)" : "var(--danger)",
+      color: "#ff0000",
+      fontWeight: 800,
+      textTransform: "uppercase",
       fontSize: 13,
       marginTop: 8,
       marginBottom: 0
@@ -1926,7 +2036,66 @@ function SessionRosterPanel({
       fontSize: 13,
       margin: 0
     }
-  }, "No players found — check the Players tab in the Sheet.")));
+  }, "No players found — check the Players tab in the Sheet.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "ttc-sidebar-heading",
+    style: {
+      margin: 0
+    }
+  }, "Tables"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemoveTable,
+    title: "Remove the highest-numbered table",
+    style: {
+      border: "1px solid var(--line)",
+      borderRadius: 6,
+      background: "var(--bg-card)",
+      color: "var(--ink)",
+      width: 26,
+      height: 26,
+      cursor: "pointer",
+      fontSize: 15,
+      lineHeight: 1
+    }
+  }, "\u2212"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onAddTable,
+    title: "Add another table",
+    style: {
+      border: "1px solid var(--line)",
+      borderRadius: 6,
+      background: "var(--bg-card)",
+      color: "var(--ink)",
+      width: 26,
+      height: 26,
+      cursor: "pointer",
+      fontSize: 15,
+      lineHeight: 1
+    }
+  }, "+"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, peerTableNumbers(startTable, endTable, martinPresent).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+    key: t,
+    tableNum: t,
+    isRetired: retiredTables.has(t),
+    onToggle: onToggleTableRetired
+  }))));
 }
 
 // Builds a plain-text attendance record for the Save/Share button — kept
@@ -2105,12 +2274,13 @@ function SessionScreen({
   // the button appears to do nothing.
   const [confirmingEndSession, setConfirmingEndSession] = useState(false);
   // Tables an organizer has marked "not in use" — e.g. a table too close
-  // to a wall, skipped when numbers are low. Session-scoped (not saved
-  // between sessions) since it's about today's physical space, not a
-  // permanent property of the table. Round generation and manual
-  // placement both skip these; toggling is allowed any time, including
-  // mid-round.
-  const [retiredTables, setRetiredTables] = useState(() => new Set());
+  // to a wall, skipped when numbers are low. Seeded from whatever was
+  // chosen during Setup (before Round 1 even exists), then session-scoped
+  // from here on (not saved between different sessions) since it's about
+  // today's physical space, not a permanent property of the table. Round
+  // generation and manual placement both skip these; toggling is allowed
+  // any time, including mid-round.
+  const [retiredTables, setRetiredTables] = useState(() => new Set(config.retiredTables || []));
   const handleToggleTableRetired = tableNum => {
     const wasRetired = retiredTables.has(tableNum);
     const nextRetired = new Set(retiredTables);
@@ -2132,10 +2302,25 @@ function SessionScreen({
       const target = slots.find(s => s.table === tableNum && !s.isMartin);
       if (!target) return prev;
       if (wasRetired) {
-        // Reactivating: just open the table back up — nobody needs to
-        // move for this.
+        // Reactivating: open the table back up, and if there are 2+
+        // players already waiting off to the side (e.g. late arrivals),
+        // seat them here right away instead of leaving them in the
+        // sidebar for someone to place manually.
         target.isRetired = false;
         target.capacity = 4;
+        const seatedIds = new Set();
+        slots.forEach(s => s.ids.forEach(id => seatedIds.add(id)));
+        const offBoard = presentPlayers.filter(p => !seatedIds.has(p.id)).map(p => p.id);
+        if (offBoard.length >= 2) {
+          const gradeMap = {};
+          presentPlayers.forEach(p => {
+            gradeMap[p.id] = p.grade;
+          });
+          const {
+            pairs
+          } = buildPairs(offBoard, history.pairHistory, history.pairLastRound, new Set(), gradeMap);
+          if (pairs.length > 0) target.ids = pairs[0];
+        }
       } else {
         // Retiring: pull only this table's own players off (every other
         // table is untouched), mark it retired, then try to re-seat the
@@ -2178,10 +2363,67 @@ function SessionScreen({
       return next;
     });
   };
+  // Brings a brand new table into rotation mid-session — for when more
+  // tables are needed than Setup's headcount-based count allowed for
+  // (e.g. a run of late arrivals), not just re-activating one that was
+  // already configured and then retired. Appends one empty, usable slot
+  // to whichever round is currently on screen; future rounds pick up the
+  // wider range naturally since endTable is now derived from this state.
+  const handleAddTable = () => {
+    const newTableNum = endTable + 1;
+    setSessionTableCount(c => c + 1);
+    setRounds(prev => {
+      const idx = currentRoundIdx;
+      const round = prev[idx];
+      if (!round) return prev;
+      if (round.slots.some(s => s.table === newTableNum)) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...round,
+        slots: [...round.slots, {
+          key: `table-${newTableNum}`,
+          table: newTableNum,
+          isMartin: false,
+          isRetired: false,
+          capacity: 4,
+          ids: []
+        }]
+      };
+      return next;
+    });
+  };
+  // Removes the highest-numbered table from rotation entirely (for
+  // undoing an accidental add, or trimming back down) — guarded so it
+  // can never silently strand players who are currently seated there;
+  // retire that table instead if it's occupied.
+  const handleRemoveTable = () => {
+    if (sessionTableCount <= 1) return;
+    const removingTableNum = endTable;
+    const round = rounds[currentRoundIdx];
+    const targetSlot = round && round.slots.find(s => s.table === removingTableNum);
+    if (targetSlot && targetSlot.ids.length > 0) return;
+    setSessionTableCount(c => Math.max(1, c - 1));
+    setRounds(prev => {
+      const idx = currentRoundIdx;
+      const r = prev[idx];
+      if (!r) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...r,
+        slots: r.slots.filter(s => s.table !== removingTableNum)
+      };
+      return next;
+    });
+  };
   const initedRef = useRef(false);
   const sessionEndedRef = useRef(false);
   const startTable = config.startTable || 1;
-  const endTable = startTable + (config.tableCount || 9) - 1;
+  // Was a frozen const derived once from Setup's table count — now real
+  // state, so more tables can be brought into rotation mid-session (e.g.
+  // late arrivals exceed what headcount originally called for), not just
+  // re-activating ones that were already configured and then retired.
+  const [sessionTableCount, setSessionTableCount] = useState(config.tableCount || 9);
+  const endTable = startTable + sessionTableCount - 1;
   const presentPlayers = players.filter(p => presentIds.has(p.id));
   const playersById = useMemo(() => Object.fromEntries(players.map(p => [p.id, p])), [players]);
   // presentIds only reflects who's checked in RIGHT NOW — checking out
@@ -2719,7 +2961,14 @@ function SessionScreen({
     rosterLoading: rosterLoading,
     rosterError: rosterError,
     usingCache: usingCache,
-    onRefreshRoster: onRefreshRoster
+    onRefreshRoster: onRefreshRoster,
+    martinPresent: config.martinPresent,
+    startTable: startTable,
+    endTable: endTable,
+    retiredTables: retiredTables,
+    onToggleTableRetired: handleToggleTableRetired,
+    onAddTable: handleAddTable,
+    onRemoveTable: handleRemoveTable
   }))), activePlayerAction && /*#__PURE__*/React.createElement(PlayerActionModal, {
     player: activePlayerAction.player,
     mode: activePlayerAction.mode,
@@ -2807,15 +3056,23 @@ function App() {
       const fresh = await fetchRosterFromSheet();
       setPlayers(fresh);
       setUsingCache(false);
-      saveStorage(ROSTER_CACHE_KEY, fresh);
+      saveStorage(ROSTER_CACHE_KEY, {
+        version: ROSTER_CACHE_VERSION,
+        players: fresh
+      });
     } catch (err) {
-      const cached = await loadStorage(ROSTER_CACHE_KEY);
+      const cachedWrapper = await loadStorage(ROSTER_CACHE_KEY);
+      // Only trust a cache saved under the CURRENT schema version — an
+      // older-format cache (or one from before versioning existed at
+      // all) is treated the same as having no cache, rather than
+      // silently using it with newer fields like keyStatus missing.
+      const cached = cachedWrapper && cachedWrapper.version === ROSTER_CACHE_VERSION ? cachedWrapper.players : null;
       if (cached && cached.length) {
         setPlayers(cached);
         setUsingCache(true);
-        setRosterError("Couldn't reach the player list — showing a saved copy from last time.");
+        setRosterError("Connection error. Make sure you're connected to the Internet via Wifi or Hotspot");
       } else {
-        setRosterError("Couldn't load the player list, and there's no saved copy yet. Check the connection and tap Refresh.");
+        setRosterError("Connection error. Make sure you're connected to the Internet via Wifi or Hotspot");
       }
     } finally {
       setRosterLoading(false);
