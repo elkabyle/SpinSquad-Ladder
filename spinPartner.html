@@ -438,7 +438,7 @@ async function fetchRosterFromSheet() {
     keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None"
   }));
 }
-function sendAttendance(presentPlayers, martinPresent) {
+function sendAttendance(presentPlayers, martinPresent, pairings) {
   if (!ATTENDANCE_ENDPOINT_URL || ATTENDANCE_ENDPOINT_URL.startsWith("PASTE_")) return;
   if (!presentPlayers.length) return;
   const payload = {
@@ -448,7 +448,8 @@ function sendAttendance(presentPlayers, martinPresent) {
       name: p.name,
       category: categoryLabel(p.category),
       keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None"
-    }))
+    })),
+    pairings: pairings || []
   };
   try {
     // mode: "no-cors" + text/plain avoids a CORS preflight, which Apps
@@ -939,6 +940,32 @@ function roundForHistory(round, presentIds) {
     martinTrainee: slotsToMartinTrainee(round.slots),
     resting: slotsToResting(round.slots, presentIds)
   };
+}
+
+/**
+ * Records, for a session-long report, who shared a table with whom this
+ * round — every pairwise combination at each table, including Martin
+ * (shown as "Martin" rather than his internal pseudo-id). This is
+ * deliberately separate from pairHistory: that system exists purely for
+ * grade-matching/repeat-avoidance and excludes Martin on purpose, since
+ * he isn't subject to those rules — this report is just an honest record
+ * of who actually played with whom, coach included. Mutates `pairings`
+ * in place: { playerName: Set of names they shared a table with }.
+ */
+function recordPairingsForRound(slots, pairings) {
+  slots.forEach(slot => {
+    const names = slot.ids.map(id => id === MARTIN_ID ? "Martin" : id);
+    for (let i = 0; i < names.length; i++) {
+      for (let j = i + 1; j < names.length; j++) {
+        const a = names[i];
+        const b = names[j];
+        if (!pairings[a]) pairings[a] = new Set();
+        if (!pairings[b]) pairings[b] = new Set();
+        pairings[a].add(b);
+        pairings[b].add(a);
+      }
+    }
+  });
 }
 
 /**
@@ -2436,6 +2463,10 @@ function SessionScreen({
   useEffect(() => {
     presentIds.forEach(id => everPresentIdsRef.current.add(id));
   }, [presentIds]);
+  // Session-long "who played with whom" record — see
+  // recordPairingsForRound for why this is separate from pairHistory.
+  // { playerName: Set of names } — sent to the Sheet at session end.
+  const pairingsRef = useRef({});
   // Shown every time a session ends (voluntarily via "End session" or by
   // finishing all rounds), regardless of whether the background sync to
   // the Sheet succeeded — that can't be reliably detected from here. Null
@@ -2445,7 +2476,13 @@ function SessionScreen({
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
     const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id));
-    sendAttendance(attendedPlayers, config.martinPresent);
+    const pairingNames = attendedPlayers.map(p => p.name);
+    if (config.martinPresent) pairingNames.push("Martin");
+    const pairings = pairingNames.map(name => ({
+      name,
+      partners: pairingsRef.current[name] ? [...pairingsRef.current[name]].sort() : []
+    }));
+    sendAttendance(attendedPlayers, config.martinPresent, pairings);
     if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount);
     setSessionSummary({
       date: todayDateString(),
@@ -2500,6 +2537,7 @@ function SessionScreen({
       // happened.
       const finishedRound = rounds[roundIdx];
       const finishedForHistory = roundForHistory(finishedRound, presentIds);
+      recordPairingsForRound(finishedRound.slots, pairingsRef.current);
       const updatedHistory = applyRoundToHistory(finishedForHistory, history);
       setHistory(updatedHistory);
       const isLast = roundIdx >= TOTAL_ROUNDS - 1;
@@ -2576,6 +2614,7 @@ function SessionScreen({
     // persisting, not just whatever completed earlier.
     let finalHistory = history;
     if (phase === "playing" && rounds[roundIdx]) {
+      recordPairingsForRound(rounds[roundIdx].slots, pairingsRef.current);
       finalHistory = applyRoundToHistory(roundForHistory(rounds[roundIdx], presentIds), history);
     }
     finalizeSessionOnce(finalHistory);
