@@ -435,7 +435,11 @@ async function fetchRosterFromSheet() {
     name: p.name,
     grade: p.grade === 2 ? 2 : 1,
     category: p.category === "junior" || p.category === "retired" ? p.category : "senior",
-    keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None"
+    keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None",
+    // Optional per-player name highlight (e.g. for players who have
+    // trouble spotting their own name) — set via the Players tab's
+    // "Highlight" column; blank for almost everyone.
+    highlightColor: p.highlightColor ? String(p.highlightColor).trim().toLowerCase() : null
   }));
 }
 function sendAttendance(presentPlayers, martinPresent, pairings) {
@@ -1264,7 +1268,9 @@ function CheckInPanel({
       padding: "8px 14px"
     },
     onClick: () => setConfirmTarget(p)
-  }, p.name)))), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, p.id) || undefined
+  }, p.name))))), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "var(--ink-dim)",
@@ -1289,7 +1295,9 @@ function CheckInPanel({
       padding: "8px 14px"
     },
     onClick: () => setConfirmTarget(p)
-  }, p.name)), !rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, p.id) || undefined
+  }, p.name))), !rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13,
@@ -1345,6 +1353,7 @@ function CheckInPanel({
 }
 const SESSION_MINUTES = 120;
 const ROUND_MINUTE_OPTIONS = [1, 12, 15, 20, 25, 30];
+const EXTRA_TIME_OPTIONS = [0, 15, 30, 45, 60];
 
 // Fewer players means fewer unique pairings possible, so long, frequent
 // swaps burn through the variety fast and start repeating. Suggest longer,
@@ -1459,6 +1468,10 @@ function SetupScreen({
   const [martinPresent, setMartinPresent] = useState(true);
   const [roundMinutes, setRoundMinutes] = useState(15);
   const [roundMinutesTouched, setRoundMinutesTouched] = useState(false);
+  // For days starting earlier than usual (up to an extra hour) — added
+  // on top of the normal session length when working out how many
+  // rounds fit.
+  const [extraMinutes, setExtraMinutes] = useState(0);
   const {
     startTable,
     tableCount
@@ -1488,7 +1501,7 @@ function SetupScreen({
   };
   const presentCount = presentIds.size;
   const canStart = presentCount >= 2;
-  const totalRounds = Math.max(2, Math.round(SESSION_MINUTES / roundMinutes));
+  const totalRounds = Math.max(2, Math.round((SESSION_MINUTES + extraMinutes) / roundMinutes));
   useEffect(() => {
     if (!roundMinutesTouched) setRoundMinutes(suggestRoundMinutes(presentCount || 1));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1609,14 +1622,39 @@ function SetupScreen({
       setRoundMinutes(m);
       setRoundMinutesTouched(true);
     }
-  }, m, " min"))), /*#__PURE__*/React.createElement("p", {
+  }, m, " min"))), /*#__PURE__*/React.createElement("span", {
+    className: "ttc-label",
+    style: {
+      marginTop: 16
+    }
+  }, "Extra time today?"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 12,
+      marginTop: 0,
+      marginBottom: 12
+    }
+  }, "For days starting earlier than usual — adds to the session length so more rounds fit."), /*#__PURE__*/React.createElement("div", {
+    className: "ttc-toggle-group",
+    style: {
+      flexWrap: "wrap"
+    }
+  }, EXTRA_TIME_OPTIONS.map(m => /*#__PURE__*/React.createElement("button", {
+    key: m,
+    className: `ttc-toggle ${extraMinutes === m ? "active" : ""}`,
+    style: {
+      padding: "10px 14px",
+      flex: "1 1 70px"
+    },
+    onClick: () => setExtraMinutes(m)
+  }, m === 0 ? "None" : `+${m} min`))), /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13,
       marginTop: 12,
       marginBottom: 0
     }
-  }, totalRounds, " rounds × ", roundMinutes, " min ≈ ", totalRounds * roundMinutes, " min session")), /*#__PURE__*/React.createElement(CheckInPanel, {
+  }, totalRounds, " rounds × ", roundMinutes, " min ≈ ", totalRounds * roundMinutes, " min session", extraMinutes > 0 ? ` (includes +${extraMinutes} min extra)` : "")), /*#__PURE__*/React.createElement(CheckInPanel, {
     players: players,
     presentIds: presentIds,
     onToggle: onTogglePresent,
@@ -1701,6 +1739,33 @@ function nameOf(players, id) {
   if (id === MARTIN_ID) return "Martin";
   return players.find(p => p.id === id)?.name || "?";
 }
+// Preset colors a player's name can be highlighted with (set via the
+// Players tab's "Highlight" column, e.g. "Pink" or "Blue" — matched
+// case-insensitively). Chosen to read clearly against this app's dark
+// background; add more here if a color beyond these is ever needed.
+const NAME_HIGHLIGHT_COLORS = {
+  pink: "#ff4da6",
+  blue: "#38bdf8",
+  green: "#4ade80",
+  orange: "#ffa94d",
+  purple: "#c084fc",
+  yellow: "#f5d90a"
+};
+// Returns { color, fontWeight } for a player whose name should stand
+// out (reading difficulty, low vision, etc.), or null for everyone else.
+// Used wherever a player's name is rendered, so one Sheet edit updates
+// every screen at once rather than needing to track down each spot.
+function highlightStyleForPlayer(player) {
+  const color = player && player.highlightColor ? NAME_HIGHLIGHT_COLORS[player.highlightColor] : null;
+  return color ? {
+    color,
+    fontWeight: 800
+  } : null;
+}
+function highlightStyleFor(players, id) {
+  if (id === MARTIN_ID) return null;
+  return highlightStyleForPlayer(players.find(pl => pl.id === id));
+}
 function SlotBoardCard({
   slot,
   players,
@@ -1765,7 +1830,9 @@ function SlotBoardCard({
     type: "button",
     className: `ttc-player-card ${heldPlayerId === id ? "held" : ""}`,
     onClick: () => onCardTap(id)
-  }, nameOf(players, id))), Array.from({
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, id) || undefined
+  }, nameOf(players, id)))), Array.from({
     length: emptyCount
   }).map((_, i) => /*#__PURE__*/React.createElement("button", {
     key: `empty-${i}`,
@@ -1917,7 +1984,9 @@ function PlayerActionModal({
       fontSize: 26,
       margin: "0 0 16px"
     }
-  }, player.name), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleForPlayer(player) || undefined
+  }, player.name)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
@@ -2031,7 +2100,9 @@ function SessionRosterPanel({
       padding: "8px 14px"
     },
     onClick: () => onCardTap(p.id)
-  }, p.name)), offTable.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, p.id) || undefined
+  }, p.name))), offTable.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13,
@@ -2057,7 +2128,9 @@ function SessionRosterPanel({
       padding: "8px 14px"
     },
     onClick: () => onJoinTap(p)
-  }, p.name)), !rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, p.id) || undefined
+  }, p.name))), !rosterLoading && players.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13,
@@ -2219,7 +2292,9 @@ function SessionSummaryScreen({
       padding: "8px 4px",
       borderBottom: "1px solid var(--line)"
     }
-  }, /*#__PURE__*/React.createElement("span", null, p.name), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleForPlayer(p) || undefined
+  }, p.name), /*#__PURE__*/React.createElement("span", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 13
@@ -2488,7 +2563,8 @@ function SessionScreen({
       date: todayDateString(),
       players: attendedPlayers.map(p => ({
         name: p.name,
-        category: categoryLabel(p.category)
+        category: categoryLabel(p.category),
+        highlightColor: p.highlightColor
       }))
     });
   }, [players, onPersistFairness, config.martinPresent]);
@@ -2931,7 +3007,9 @@ function SessionScreen({
       color: "var(--orange)",
       fontWeight: 800
     }
-  }, "Holding ", nameOf(players, heldPlayerId), " — tap another card to swap, an empty spot to place, or the sidebar to leave off-table")), phase === "break" && /*#__PURE__*/React.createElement("div", {
+  }, "Holding ", /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, heldPlayerId) || undefined
+  }, nameOf(players, heldPlayerId)), " — tap another card to swap, an empty spot to place, or the sidebar to leave off-table")), phase === "break" && /*#__PURE__*/React.createElement("div", {
     className: "ttc-card",
     style: {
       textAlign: "center",
