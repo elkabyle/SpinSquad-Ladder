@@ -997,26 +997,34 @@ function moveHeldPlayer(slots, heldId, target) {
     return next;
   }
   if (target.kind === "card") {
+    let targetSlot = null;
     for (const s of next) {
       const idx = s.ids.indexOf(target.playerId);
       if (idx !== -1) {
+        targetSlot = s;
         s.ids.splice(idx, 1, heldId);
         if (heldOldSlotKey) {
           const oldSlot = next.find(x => x.key === heldOldSlotKey);
           if (oldSlot) oldSlot.ids.push(target.playerId);
         }
-        // if heldOldSlotKey is null, heldId came from off-table — the
-        // swapped-out player simply goes off-table too, which is already
-        // true here since they were removed and not placed anywhere else.
         break;
       }
+    }
+    // The target can be an off-table sidebar card. In that case it has no
+    // slot of its own: put it into the dragged card's old slot, while the
+    // dragged card becomes off-table. This makes card-over-card swapping
+    // consistent across both the board and sidebar.
+    if (!targetSlot && heldOldSlotKey) {
+      const oldSlot = next.find(x => x.key === heldOldSlotKey);
+      if (oldSlot) oldSlot.ids.push(target.playerId);
     }
     return next;
   }
   if (target.kind === "slot") {
     const slot = next.find(s => s.key === target.key);
     if (slot && slot.ids.length < slot.capacity) {
-      slot.ids.push(heldId);
+      const insertAt = Number.isInteger(target.index) ? Math.min(target.index, slot.ids.length) : slot.ids.length;
+      slot.ids.splice(insertAt, 0, heldId);
     } else if (heldOldSlotKey) {
       // Full or missing target — reject the move, put heldId back.
       const oldSlot = next.find(s => s.key === heldOldSlotKey);
@@ -1147,13 +1155,27 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
       padding: 6px 14px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--line);
     }
 
-    .ttc-slot-cards { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .ttc-slot-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
     button.ttc-player-card {
       background: var(--bg-card); border: 2px solid var(--line); border-radius: 12px;
       padding: 10px 16px; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 17px;
-      color: var(--ink); cursor: pointer; min-width: 84px; text-align: center;
+      color: var(--ink); cursor: pointer; min-width: 0; width: 100%; min-height: 52px; text-align: center;
     }
     button.ttc-player-card:hover { border-color: var(--orange); }
+    button.ttc-player-card.ttc-dragging, .ttc-chip.ttc-dragging { opacity: 0.45; transform: scale(0.96); }
+    button.ttc-player-card.ttc-drop-target, .ttc-chip.ttc-drop-target {
+      border-color: var(--orange) !important; outline: 2px solid var(--orange); outline-offset: 2px;
+    }
+    .ttc-table-card.ttc-drop-table {
+      border-color: var(--orange); box-shadow: 0 0 0 3px var(--orange-dim), inset 0 0 32px rgba(255,106,57,0.13);
+    }
+    .ttc-drag-cursor {
+      position: fixed; z-index: 100; pointer-events: none; transform: translate(-50%, -50%);
+      max-width: min(240px, calc(100vw - 32px)); padding: 10px 14px; border: 2px solid var(--orange);
+      border-radius: 12px; background: var(--bg-card); color: var(--ink); font-size: 16px; font-weight: 800;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ttc-draggable { touch-action: none; user-select: none; -webkit-user-select: none; }
     button.ttc-player-card.held { background: var(--orange); border-color: var(--orange); color: #1a0f08; }
     button.ttc-player-card.empty {
       background: transparent; border: 2px dashed var(--line); color: var(--ink-dim);
@@ -1773,6 +1795,9 @@ function SlotBoardCard({
   heldPlayerId,
   onCardTap,
   onEmptyTap,
+  onPointerDragStart,
+  draggingPlayerId,
+  dragTarget,
   onToggleTableRetired
 }) {
   // Martin's own pseudo-card doesn't have a grade, so it's excluded from
@@ -1813,7 +1838,8 @@ function SlotBoardCard({
     onClick: () => onToggleTableRetired(slot.table)
   }, `Table ${slot.table}`);
   return /*#__PURE__*/React.createElement("div", {
-    className: `ttc-table-card ${slot.isMartin ? "martin" : ""}`
+    className: `ttc-table-card ${slot.isMartin ? "martin" : ""} ${dragTarget === `table:${slot.key}` ? "ttc-drop-table" : ""}`,
+    "data-drag-table-key": slot.key
   }, tableLabel, slot.isMartin && /*#__PURE__*/React.createElement("span", {
     className: "ttc-chip",
     style: {
@@ -1828,8 +1854,10 @@ function SlotBoardCard({
   }, slot.ids.map(id => /*#__PURE__*/React.createElement("button", {
     key: id,
     type: "button",
-    className: `ttc-player-card ${heldPlayerId === id ? "held" : ""}`,
-    onClick: () => onCardTap(id)
+    className: `ttc-player-card ttc-draggable ${heldPlayerId === id ? "held" : ""} ${draggingPlayerId === id ? "ttc-dragging" : ""} ${dragTarget === `card:${id}` ? "ttc-drop-target" : ""}`,
+    "data-drag-player-id": id,
+    onPointerDown: e => onPointerDragStart(e, id),
+    onClick: e => onCardTap(id, e)
   }, /*#__PURE__*/React.createElement("span", {
     style: highlightStyleFor(players, id) || undefined
   }, nameOf(players, id)))), Array.from({
@@ -1837,10 +1865,12 @@ function SlotBoardCard({
   }).map((_, i) => /*#__PURE__*/React.createElement("button", {
     key: `empty-${i}`,
     type: "button",
-    className: "ttc-player-card empty",
-    disabled: !heldPlayerId,
+    className: `ttc-player-card empty ${dragTarget === `slot:${slot.key}:${slot.ids.length + i}` ? "ttc-drop-target" : ""}`,
+    "data-drag-slot-key": slot.key,
+    "data-drag-slot-index": slot.ids.length + i,
+    disabled: !heldPlayerId && !draggingPlayerId,
     onClick: () => onEmptyTap(slot.key)
-  }, heldPlayerId ? "+ place here" : ""))));
+  }, heldPlayerId || draggingPlayerId ? "+ drop here" : ""))));
 }
 
 /**
@@ -2015,6 +2045,9 @@ function SessionRosterPanel({
   onBoardIds,
   heldPlayerId,
   onCardTap,
+  onPointerDragStart,
+  draggingPlayerId,
+  dragTarget,
   onOffTableTap,
   onJoinTap,
   rosterLoading,
@@ -2092,14 +2125,16 @@ function SessionRosterPanel({
   }, offTable.map(p => /*#__PURE__*/React.createElement("button", {
     key: p.id,
     type: "button",
-    className: `ttc-chip ttc-chip-g1 ${heldPlayerId === p.id ? "held" : ""}`,
+    className: `ttc-chip ttc-chip-g1 ttc-draggable ${heldPlayerId === p.id ? "held" : ""} ${draggingPlayerId === p.id ? "ttc-dragging" : ""} ${dragTarget === `card:${p.id}` ? "ttc-drop-target" : ""}`,
+    "data-drag-player-id": p.id,
+    onPointerDown: e => onPointerDragStart(e, p.id),
     style: {
       border: "none",
       cursor: "pointer",
       fontSize: 14,
       padding: "8px 14px"
     },
-    onClick: () => onCardTap(p.id)
+    onClick: e => onCardTap(p.id, e)
   }, /*#__PURE__*/React.createElement("span", {
     style: highlightStyleFor(players, p.id) || undefined
   }, p.name))), offTable.length === 0 && /*#__PURE__*/React.createElement("p", {
@@ -2368,6 +2403,14 @@ function SessionScreen({
   const [phase, setPhase] = useState("playing"); // playing | break | done
   const [secondsLeft, setSecondsLeft] = useState(roundSeconds);
   const [heldPlayerId, setHeldPlayerId] = useState(null);
+  // Pointer Events cover mouse, pen, and touch in one interaction path.
+  // A short movement threshold preserves the existing tap controls for
+  // organisers who still prefer them.
+  const pointerDragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const [draggingPlayerId, setDraggingPlayerId] = useState(null);
+  const [dragTarget, setDragTarget] = useState(null);
+  const [dragCursor, setDragCursor] = useState(null);
   const [activePlayerAction, setActivePlayerAction] = useState(null); // { player, mode } | null
   // Confirming "End session" uses an in-app modal rather than
   // window.confirm() — the native browser confirm dialog depends on the
@@ -2772,13 +2815,10 @@ function SessionScreen({
     });
   };
 
-  // Seats newly-checked-in players who are still off-table into any
-  // completely empty ordinary table (never Martin's — that always has
-  // at least him on it). Uses the same grade-priority, session-repeat-
-  // avoiding scoring as round generation: in doubles mode it tries to
-  // form full same-grade-where-possible foursomes first, then pairs off
-  // whoever's left, one table at a time until either the off-table pool
-  // or the empty tables run out.
+  // Seats newly-checked-in players who are still off-table. A usable
+  // one-player ordinary table is filled first, which preserves a manual
+  // placement and lets a single late arrival immediately get a partner.
+  // Remaining players are then placed on completely empty tables.
   const autoFillEmptyTables = updatedPresentPlayers => {
     setRounds(prev => {
       const next = [...prev];
@@ -2787,25 +2827,42 @@ function SessionScreen({
       const seatedIds = new Set();
       round.slots.forEach(s => s.ids.forEach(id => seatedIds.add(id)));
       let offBoard = updatedPresentPlayers.filter(p => !seatedIds.has(p.id)).map(p => p.id);
-      // A single new check-in with nobody else off-table stays in the
-      // sidebar rather than being seated alone — an empty table with one
-      // person sitting there isn't useful, and it would also block a
-      // *second* late arrival from being paired with them (since the
-      // first would already read as "on board" here). Waiting for a
-      // second off-table player — another late arrival, or someone
-      // already resting — is what lets two people actually get matched
-      // together onto one table.
-      if (offBoard.length < 2) return prev;
       const slots = round.slots.map(s => ({
         ...s,
         ids: [...s.ids]
       }));
-      const emptySlots = slots.filter(s => !s.isMartin && !s.isRetired && s.ids.length === 0);
-      if (emptySlots.length === 0) return prev;
       const gradeMap = {};
       updatedPresentPlayers.forEach(p => {
         gradeMap[p.id] = p.grade;
       });
+      let changed = false;
+      // Find the best late-arrival/table-single combination with the same
+      // grade-first, repeat-avoiding score used by the normal draw.
+      let onePlayerSlots = slots.filter(s => !s.isMartin && !s.isRetired && s.ids.length === 1 && s.capacity > 1);
+      while (offBoard.length > 0 && onePlayerSlots.length > 0) {
+        let best = null;
+        onePlayerSlots.forEach(slot => offBoard.forEach(id => {
+          const score = combinedPairScore(history.pairHistory, history.pairLastRound, gradeMap, slot.ids[0], id);
+          if (!best || score < best.score) best = { slot, id, score };
+        }));
+        best.slot.ids.push(best.id);
+        offBoard = offBoard.filter(id => id !== best.id);
+        onePlayerSlots = onePlayerSlots.filter(slot => slot !== best.slot);
+        changed = true;
+      }
+      // A lone arrival with no one-player table remains off-table. This
+      // avoids seating them alone on an otherwise empty table.
+      if (offBoard.length < 2) {
+        if (!changed) return prev;
+        next[currentRoundIdx] = { ...round, slots };
+        return next;
+      }
+      const emptySlots = slots.filter(s => !s.isMartin && !s.isRetired && s.ids.length === 0);
+      if (emptySlots.length === 0) {
+        if (!changed) return prev;
+        next[currentRoundIdx] = { ...round, slots };
+        return next;
+      }
       const noConflicts = new Set();
       let slotIdx = 0;
       if (isDoublesMode && offBoard.length >= 4) {
@@ -2832,7 +2889,7 @@ function SessionScreen({
           slotIdx++;
         });
       }
-      if (slotIdx === 0) return prev;
+      if (slotIdx === 0 && !changed) return prev;
       next[currentRoundIdx] = {
         ...round,
         slots
@@ -2842,20 +2899,79 @@ function SessionScreen({
   };
   const applyMove = target => {
     if (!heldPlayerId) return;
+    movePlayer(heldPlayerId, target);
+    setHeldPlayerId(null);
+  };
+  const movePlayer = (playerId, target) => {
     setRounds(prev => {
       const next = [...prev];
+      if (!next[currentRoundIdx]) return prev;
       next[currentRoundIdx] = {
         ...next[currentRoundIdx],
-        slots: moveHeldPlayer(next[currentRoundIdx].slots, heldPlayerId, target)
+        slots: moveHeldPlayer(next[currentRoundIdx].slots, playerId, target)
       };
       return next;
     });
-    setHeldPlayerId(null);
   };
+
+  const findDragTarget = (x, y) => {
+    const element = document.elementFromPoint(x, y);
+    const target = element && element.closest("[data-drag-player-id], [data-drag-slot-key], [data-drag-table-key]");
+    if (!target || target.disabled) return null;
+    if (target.dataset.dragPlayerId) return { kind: "card", playerId: target.dataset.dragPlayerId };
+    if (target.dataset.dragSlotKey) return { kind: "slot", key: target.dataset.dragSlotKey, index: Number(target.dataset.dragSlotIndex) };
+    if (target.dataset.dragTableKey) return { kind: "slot", key: target.dataset.dragTableKey };
+    return null;
+  };
+  const dragTargetLabel = target => target ? target.kind === "card" ? `card:${target.playerId}` : Number.isInteger(target.index) ? `slot:${target.key}:${target.index}` : `table:${target.key}` : null;
+  const handlePointerDragStart = (event, playerId) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    pointerDragRef.current = { playerId, startX: event.clientX, startY: event.clientY, active: false };
+  };
+  useEffect(() => {
+    const handlePointerMove = event => {
+      const drag = pointerDragRef.current;
+      if (!drag) return;
+      if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 8) return;
+      if (!drag.active) {
+        drag.active = true;
+        setDraggingPlayerId(drag.playerId);
+      }
+      setDragCursor({ x: event.clientX, y: event.clientY, playerId: drag.playerId });
+      const target = findDragTarget(event.clientX, event.clientY);
+      setDragTarget(dragTargetLabel(target));
+      if (event.cancelable) event.preventDefault();
+    };
+    const finishPointerDrag = event => {
+      const drag = pointerDragRef.current;
+      if (!drag) return;
+      pointerDragRef.current = null;
+      if (drag.active) {
+        const target = findDragTarget(event.clientX, event.clientY);
+        if (target && !(target.kind === "card" && target.playerId === drag.playerId)) {
+          movePlayer(drag.playerId, target);
+          suppressClickRef.current = true;
+          setTimeout(() => { suppressClickRef.current = false; }, 0);
+        }
+      }
+      setDraggingPlayerId(null);
+      setDragTarget(null);
+      setDragCursor(null);
+    };
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", finishPointerDrag);
+    window.addEventListener("pointercancel", finishPointerDrag);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishPointerDrag);
+      window.removeEventListener("pointercancel", finishPointerDrag);
+    };
+  });
 
   // Tapping a card on the board itself: pick it up (nothing held), swap
   // with whatever's currently held, or put down the currently-held card.
   const handleBoardCardTap = playerId => {
+    if (suppressClickRef.current) return;
     if (heldPlayerId === null) {
       if (playerId === MARTIN_ID) {
         setActivePlayerAction({
@@ -2894,6 +3010,7 @@ function SessionScreen({
   // as tapping one on the board — same action modal, same swap-target
   // behavior while a card is held.
   const handleSidebarOffTableTap = playerId => {
+    if (suppressClickRef.current) return;
     if (heldPlayerId === null) {
       setActivePlayerAction({
         player: playersById[playerId] || {
@@ -2928,7 +3045,13 @@ function SessionScreen({
       maxWidth: 1300,
       margin: "0 auto"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, dragCursor && /*#__PURE__*/React.createElement("div", {
+    className: "ttc-drag-cursor",
+    style: {
+      left: dragCursor.x,
+      top: dragCursor.y
+    }
+  }, nameOf(players, dragCursor.playerId)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -3059,6 +3182,9 @@ function SessionScreen({
     heldPlayerId: heldPlayerId,
     onCardTap: handleBoardCardTap,
     onEmptyTap: handleEmptyTap,
+    onPointerDragStart: handlePointerDragStart,
+    draggingPlayerId: draggingPlayerId,
+    dragTarget: dragTarget,
     onToggleTableRetired: handleToggleTableRetired
   }))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3071,6 +3197,9 @@ function SessionScreen({
     onBoardIds: onBoardIds,
     heldPlayerId: heldPlayerId,
     onCardTap: handleSidebarOffTableTap,
+    onPointerDragStart: handlePointerDragStart,
+    draggingPlayerId: draggingPlayerId,
+    dragTarget: dragTarget,
     onOffTableTap: () => applyMove({
       kind: "offtable"
     }),
