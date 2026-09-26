@@ -752,13 +752,23 @@ function generateRound({
   martinTrainedCount,
   martinLastRound,
   restCount,
-  lastRestRound
+  lastRestRound,
+  martinQueue,
+  martinTrainedToday
 }) {
   const prevPairsSet = extractPrevPairKeys(previousRound);
   let pool = presentPlayers.map(p => p.id);
   let martinTrainee = null;
   if (martinPresent && pool.length > 0) {
-    martinTrainee = pickByLeastRecent(pool, martinTrainedCount, martinLastRound);
+    // Martin's own pre-set list of who he wants to train today, in the
+    // order he wants them (see MartinQueueModal) — take the first entry
+    // that's actually present and hasn't already trained with him today.
+    // Falls through to the normal fairness-based pick once the list is
+    // exhausted (or empty), so unlisted/late-arriving players still get
+    // rotated in automatically and Martin is never left without a
+    // trainee just because the list ran out.
+    const queuedPick = (martinQueue || []).find(id => pool.includes(id) && !(martinTrainedToday && martinTrainedToday[id]));
+    martinTrainee = queuedPick || pickByLeastRecent(pool, martinTrainedCount, martinLastRound);
     pool = pool.filter(id => id !== martinTrainee);
   }
   const gradeMap = {};
@@ -847,9 +857,17 @@ function applyRoundToHistory(round, hist) {
   const martinLastRound = {
     ...hist.martinLastRound
   };
+  // Session-only tally (never seeded from lifetime fairness data, unlike
+  // martinTrainedCount above) of who's already trained with Martin today —
+  // used solely to skip someone in his queue once they've had their turn,
+  // so the list doesn't repeat the same person every round.
+  const martinTrainedToday = {
+    ...hist.martinTrainedToday
+  };
   if (round.martinTrainee) {
     martinTrainedCount[round.martinTrainee] = (martinTrainedCount[round.martinTrainee] || 0) + 1;
     martinLastRound[round.martinTrainee] = round.index;
+    martinTrainedToday[round.martinTrainee] = (martinTrainedToday[round.martinTrainee] || 0) + 1;
   }
   const restCount = {
     ...hist.restCount
@@ -866,6 +884,7 @@ function applyRoundToHistory(round, hist) {
     pairLastRound,
     martinTrainedCount,
     martinLastRound,
+    martinTrainedToday,
     restCount,
     lastRestRound
   };
@@ -875,6 +894,7 @@ const emptyHistory = () => ({
   pairLastRound: {},
   martinTrainedCount: {},
   martinLastRound: {},
+  martinTrainedToday: {},
   restCount: {},
   lastRestRound: {}
 });
@@ -1488,6 +1508,11 @@ function SetupScreen({
   onStart
 }) {
   const [martinPresent, setMartinPresent] = useState(true);
+  // Optional — who Martin wants to train today, in order (see
+  // MartinQueueModal). Left empty, everything behaves exactly as before:
+  // trainees are picked automatically each round.
+  const [martinQueue, setMartinQueue] = useState([]);
+  const [showMartinQueueModal, setShowMartinQueueModal] = useState(false);
   const [roundMinutes, setRoundMinutes] = useState(15);
   const [roundMinutesTouched, setRoundMinutesTouched] = useState(false);
   // For days starting earlier than usual (up to an extra hour) — added
@@ -1614,7 +1639,28 @@ function SetupScreen({
   }, "Martin present"), /*#__PURE__*/React.createElement("button", {
     className: `ttc-toggle ${!martinPresent ? "active" : ""}`,
     onClick: () => setMartinPresent(false)
-  }, "Martin absent"))), /*#__PURE__*/React.createElement("div", {
+  }, "Martin absent")), martinPresent && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      marginTop: 12,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "ttc-btn ttc-btn-ghost",
+    style: {
+      padding: "8px 14px",
+      fontSize: 13
+    },
+    onClick: () => setShowMartinQueueModal(true)
+  }, martinQueue.length === 0 ? "Choose who Martin trains (optional)" : `Edit training list (${martinQueue.length})`), martinQueue.length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 12
+    }
+  }, martinQueue.map(id => players.find(p => p.id === id)?.name || id).join(", ")))), /*#__PURE__*/React.createElement("div", {
     className: "ttc-card",
     style: {
       marginBottom: 18
@@ -1696,11 +1742,19 @@ function SetupScreen({
       startTable,
       tableCount,
       martinPresent,
+      martinQueue: [...martinQueue],
       roundMinutes,
       totalRounds,
       retiredTables: [...retiredTables]
     })
-  }, canStart ? "Start Session — Round 1" : "At least 2 players need to check in first"));
+  }, canStart ? "Start Session — Round 1" : "At least 2 players need to check in first"), showMartinQueueModal && /*#__PURE__*/React.createElement(MartinQueueModal, {
+    players: players,
+    presentIds: presentIds,
+    queue: martinQueue,
+    trainedToday: null,
+    onChange: setMartinQueue,
+    onClose: () => setShowMartinQueueModal(false)
+  }));
 }
 
 /* ============================================================
@@ -2038,6 +2092,185 @@ function PlayerActionModal({
     className: "ttc-btn",
     onClick: onClose
   }, "Cancel"))));
+}
+
+/**
+ * Lets Martin (or the organizer, on his behalf) pick who he wants to
+ * train today, in order — rather than leaving every trainee pick to the
+ * automatic fairness rotation. Used from both Setup (before the session
+ * starts) and from the in-session toolbar, since late arrivals often
+ * need adding once the room's already playing. Reordering is up/down
+ * arrows rather than drag — this list is short and one-handed-friendly,
+ * and keeps it independent from the board's own drag-and-drop system.
+ * Editing the list never redraws an already-generated round; it only
+ * changes who gets picked automatically going forward (see
+ * generateRound) — a trainee already on the board can still be swapped
+ * out manually the normal way, by dragging.
+ */
+function MartinQueueModal({
+  players,
+  presentIds,
+  queue,
+  trainedToday,
+  onChange,
+  onClose
+}) {
+  const nameFor = id => {
+    const p = players.find(pl => pl.id === id);
+    return p ? p.name : id;
+  };
+  const move = (idx, dir) => {
+    const next = [...queue];
+    const swapWith = idx + dir;
+    if (swapWith < 0 || swapWith >= next.length) return;
+    [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+    onChange(next);
+  };
+  const remove = id => onChange(queue.filter(qid => qid !== id));
+  const add = id => {
+    if (!queue.includes(id)) onChange([...queue, id]);
+  };
+  const available = [...players].filter(p => presentIds.has(p.id) && !queue.includes(p.id)).sort((a, b) => a.name.localeCompare(b.name));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "ttc-modal-backdrop",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ttc-modal",
+    style: {
+      maxWidth: 440,
+      textAlign: "left"
+    },
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "ttc-display",
+    style: {
+      fontSize: 24,
+      margin: "0 0 6px"
+    }
+  }, "Martin's training list"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 13,
+      margin: "0 0 18px"
+    }
+  }, "Optional. He'll train these players in order, one per round; anyone left over is picked automatically as usual."), /*#__PURE__*/React.createElement("span", {
+    className: "ttc-label"
+  }, "Up next (", queue.length, ")"), queue.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 13,
+      margin: "6px 0 16px"
+    }
+  }, "Nobody picked yet — every round will be chosen automatically."), queue.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      margin: "6px 0 18px"
+    }
+  }, queue.map((id, idx) => {
+    const isPresent = presentIds.has(id);
+    const done = trainedToday && trainedToday[id];
+    return /*#__PURE__*/React.createElement("div", {
+      key: id,
+      className: "ttc-card",
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 10px",
+        opacity: isPresent ? 1 : 0.5
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--ink-dim)",
+        fontSize: 13,
+        fontWeight: 800,
+        minWidth: 18
+      }
+    }, idx + 1), /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: 700,
+        ...(highlightStyleFor(players, id) || {})
+      }
+    }, nameFor(id)), !isPresent && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: "var(--ink-dim)",
+        textTransform: "uppercase",
+        fontWeight: 700
+      }
+    }, "not checked in"), done && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: "var(--orange)",
+        textTransform: "uppercase",
+        fontWeight: 700
+      }
+    }, "trained today"), /*#__PURE__*/React.createElement("button", {
+      className: "ttc-btn ttc-btn-ghost",
+      style: {
+        padding: "4px 8px",
+        fontSize: 13
+      },
+      onClick: () => move(idx, -1),
+      disabled: idx === 0,
+      "aria-label": "Move up"
+    }, "\u25B2"), /*#__PURE__*/React.createElement("button", {
+      className: "ttc-btn ttc-btn-ghost",
+      style: {
+        padding: "4px 8px",
+        fontSize: 13
+      },
+      onClick: () => move(idx, 1),
+      disabled: idx === queue.length - 1,
+      "aria-label": "Move down"
+    }, "\u25BC"), /*#__PURE__*/React.createElement("button", {
+      className: "ttc-btn ttc-btn-ghost",
+      style: {
+        padding: "4px 8px",
+        fontSize: 13,
+        color: "var(--danger)"
+      },
+      onClick: () => remove(id),
+      "aria-label": "Remove"
+    }, "\u2715"));
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "ttc-label"
+  }, "Add a player"), available.length === 0 ? /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 13,
+      margin: "6px 0 18px"
+    }
+  }, "Everyone checked in is already on the list.") : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      margin: "6px 0 18px"
+    }
+  }, available.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.id,
+    className: "ttc-chip ttc-chip-g1",
+    style: {
+      border: "none",
+      cursor: "pointer",
+      fontSize: 14,
+      padding: "8px 14px"
+    },
+    onClick: () => add(p.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, p.id) || undefined
+  }, p.name)))), /*#__PURE__*/React.createElement("button", {
+    className: "ttc-btn ttc-btn-primary",
+    style: {
+      width: "100%"
+    },
+    onClick: onClose
+  }, "Done")));
 }
 function SessionRosterPanel({
   players,
@@ -2386,6 +2619,12 @@ function SessionScreen({
   const [roundSeconds, setRoundSeconds] = useState((config.roundMinutes || DEFAULT_ROUND_SECONDS / 60) * 60);
   const TOTAL_ROUNDS = config.totalRounds || DEFAULT_TOTAL_ROUNDS;
   const [isDoublesMode, setIsDoublesMode] = useState(false);
+  // Martin's own picks for who to train today, carried over from Setup
+  // (if he chose anyone) and still editable all session — mainly for
+  // late arrivals added once the room's already playing. See
+  // generateRound and MartinQueueModal.
+  const [martinQueue, setMartinQueue] = useState(() => config.martinQueue || []);
+  const [showMartinQueueModal, setShowMartinQueueModal] = useState(false);
   // Seed this session's fairness counters from the persisted lifetime
   // totals, so "who trains with Martin next" and "who rests next" keep
   // remembering past weeks rather than starting blank every session.
@@ -2624,6 +2863,7 @@ function SessionScreen({
       endTable,
       roundIndex: 0,
       retiredTables,
+      martinQueue,
       ...history
     });
     setRounds([{
@@ -2674,6 +2914,7 @@ function SessionScreen({
         roundIndex: roundIdx + 1,
         previousRound: finishedForHistory,
         retiredTables,
+        martinQueue,
         ...updatedHistory
       });
       setRounds(prev => [...prev, {
@@ -2770,6 +3011,7 @@ function SessionScreen({
       roundIndex: roundIdx + 1,
       previousRound,
       retiredTables: nextRetiredTables,
+      martinQueue,
       ...history
     });
     setRounds(prev => {
@@ -2803,6 +3045,7 @@ function SessionScreen({
       roundIndex: roundIdx,
       previousRound,
       retiredTables: nextRetiredTables,
+      martinQueue,
       ...history
     });
     setRounds(prev => {
@@ -3110,7 +3353,15 @@ function SessionScreen({
       fontSize: 13,
       padding: "8px 14px"
     }
-  }, isDoublesMode ? "Doubles: ON" : "Make doubles"), phase === "playing" && /*#__PURE__*/React.createElement("button", {
+  }, isDoublesMode ? "Doubles: ON" : "Make doubles"), config.martinPresent && /*#__PURE__*/React.createElement("button", {
+    className: "ttc-btn",
+    onClick: () => setShowMartinQueueModal(true),
+    title: "Choose or reorder who Martin trains today",
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    }
+  }, martinQueue.length === 0 ? "Martin's list" : `Martin's list (${martinQueue.length})`), phase === "playing" && /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
     onClick: handleSkipRound,
     title: "Ends the current round right now and shows the next round's draw"
@@ -3233,6 +3484,10 @@ function SessionScreen({
       const checkedOutId = activePlayerAction.player.id;
       setActivePlayerAction(null);
       onTogglePresent(checkedOutId); // moves them into the checked-out list
+      // Leaving for the day also drops them from Martin's list — an
+      // absent player left on the list would just sit there greyed out
+      // ("not checked in") indefinitely otherwise.
+      setMartinQueue(q => q.filter(id => id !== checkedOutId));
       if (phase === "break") {
         // They're on the upcoming, not-yet-started round — pull their
         // card off it, then redraw that round with everyone else so the
@@ -3269,6 +3524,13 @@ function SessionScreen({
     currentMinutes: Math.round(roundSeconds / 60),
     onApply: applyRoundDuration,
     onClose: () => setEditingRoundDuration(false)
+  }), showMartinQueueModal && /*#__PURE__*/React.createElement(MartinQueueModal, {
+    players: players,
+    presentIds: presentIds,
+    queue: martinQueue,
+    trainedToday: history.martinTrainedToday,
+    onChange: setMartinQueue,
+    onClose: () => setShowMartinQueueModal(false)
   }));
 }
 
