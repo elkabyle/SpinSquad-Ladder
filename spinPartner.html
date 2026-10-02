@@ -374,6 +374,9 @@ const ROSTER_CACHE_KEY = "ttc:rosterCache";
 const ROSTER_CACHE_VERSION = 2;
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const FAIRNESS_KEY = "ttc:fairnessHistory";
+// Last coaching-history rows fetched from the Sheet, kept so coaching
+// fairness still works if the Sheet can't be reached at the start of a session.
+const COACHING_CACHE_KEY = "ttc:coachingHistory";
 const SESSION_KEY = "ttc:session";
 async function loadStorage(key) {
   try {
@@ -451,7 +454,7 @@ function sendAttendance(presentPlayers, coachChoice, pairings, coaching) {
   // Only Martin is billed as a coach. When Keith coaches, he's just an
   // Own-key holder in the players list below — his spare seat should reduce
   // everyone else's fee, not be used up covering a Martin who isn't there.
-  const martinPresent = coachChoice === "martin";
+  const martinPresent = coachChoice === "martin" || coachChoice === "both";
   const payload = {
     date: todayDateString(),
     martinPresent: martinPresent,
@@ -489,10 +492,16 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 // this pseudo-id lets him be represented as a normal, movable card on
 // the board — same drag/swap/place mechanics as everyone else.
 const MARTIN_ID = "__martin__";
-// Display name of whoever is on the coach table this session ("Martin" or
-// "Keith"). The internal pseudo-id stays MARTIN_ID either way; SessionScreen
-// sets this at the top of every render, before any child renders.
-let COACH_NAME = "Martin";
+// Keith's own pseudo-card, used when he coaches (alone or alongside Martin).
+const KEITH_ID = "__keith__";
+const isCoachId = id => id === MARTIN_ID || id === KEITH_ID;
+const coachNameFor = id => id === KEITH_ID ? "Keith" : "Martin";
+// Setup's coachChoice ("martin" | "keith" | "both" | "neither") -> the coach
+// pseudo-ids on the board, in table order (first one gets the first table).
+const coachIdsFor = choice => choice === "both" ? [MARTIN_ID, KEITH_ID] : choice === "martin" ? [MARTIN_ID] : choice === "keith" ? [KEITH_ID] : [];
+// Keith is a roster player (an Own-key holder) who also coaches, so
+// whenever he's on a coach table he must be kept out of the player pool.
+const keithIsCoaching = choice => choice === "keith" || choice === "both";
 // Keith is also a regular roster player (a key holder). While he's the
 // coach he's kept out of the player list entirely — not selectable, not
 // draggable, not paired — but still recorded as attending at session end.
@@ -748,18 +757,71 @@ function splitTeams(quad, pairHistory, pairLastRound, prevPairsSet) {
 // be brought into rotation later if needed. Used consistently by round
 // generation, the board, and both the Setup and in-session table lists,
 // so none of them can drift out of sync with each other.
-function peerTableNumbers(startTable, endTable, martinPresent) {
+function peerTableNumbers(startTable, endTable, coachTables) {
+  // coachTables: how many tables (0, 1 or 2) are taken by coaches, counting
+  // up from startTable. A plain boolean still works (true = 1 table).
+  const skip = typeof coachTables === "number" ? coachTables : coachTables ? 1 : 0;
   const numbers = [];
   for (let t = 1; t <= endTable; t++) {
-    if (martinPresent && t === startTable) continue;
+    if (t >= startTable && t < startTable + skip) continue;
     numbers.push(t);
   }
   return numbers;
 }
+/**
+ * Picks who each coach trains this round (one trainee per coach, never the
+ * same person twice in one round). Ranking, in order:
+ *  1. Fewest times coached TODAY — so nobody is coached a second time, by
+ *     either coach, until everyone present has been coached once. Only then
+ *     (few players / lots of time) does a second pass begin.
+ *  2. Coaching list order (Setup / "Coaching list" button), if listed.
+ *  3. Who has waited longest — oldest last-coached date across BOTH coaches
+ *     (never coached = oldest), so anyone who missed out last session goes
+ *     first. This comes before total count on purpose: ranking by lifetime
+ *     count would let newcomers jump ahead of long-time members forever.
+ *  4. Swap coaches: among players otherwise tied, prefer someone whose most
+ *     recent coach was NOT the coach doing the picking, so the same player
+ *     isn't stuck with the same coach round after round (or week after week).
+ *  5. Fewer lifetime coachings, then random.
+ * Coaches pick in table order, each from whoever is left.
+ */
+function pickCoachees(pool, coachIds, {
+  coachingQueue,
+  coachingTodayList,
+  coachingLastDate,
+  coachingCount,
+  coachingLastCoach
+}) {
+  const todayOf = id => coachingTodayList && coachingTodayList[id] || 0;
+  const dateOf = id => coachingLastDate && coachingLastDate[id] || "";
+  const countOf = id => coachingCount && coachingCount[id] || 0;
+  const picks = [];
+  let remaining = [...pool];
+  for (let k = 0; k < coachIds.length && remaining.length > 0; k++) {
+    const cid = coachIds[k];
+    // 1 if this same coach was also the last one to coach the player.
+    const sameCoachAgain = id => coachingLastCoach && coachingLastCoach[id] === cid ? 1 : 0;
+    const minToday = Math.min(...remaining.map(todayOf));
+    const eligible = remaining.filter(id => todayOf(id) === minToday);
+    let pick = (coachingQueue || []).find(id => eligible.includes(id));
+    if (!pick) {
+      pick = shuffled(eligible).sort((a, b) => {
+        const da = dateOf(a);
+        const db = dateOf(b);
+        if (da !== db) return da < db ? -1 : 1;
+        const sa = sameCoachAgain(a) - sameCoachAgain(b);
+        if (sa !== 0) return sa;
+        return countOf(a) - countOf(b);
+      })[0];
+    }
+    picks.push(pick);
+    remaining = remaining.filter(id => id !== pick);
+  }
+  return picks;
+}
 function generateRound({
   presentPlayers,
-  martinPresent,
-  keithPresent,
+  coachIds,
   isDoubles,
   startTable,
   endTable,
@@ -768,35 +830,33 @@ function generateRound({
   retiredTables,
   pairHistory,
   pairLastRound,
-  martinTrainedCount,
-  martinLastRound,
   restCount,
   lastRestRound,
-  martinQueue,
-  martinTrainedToday,
   coachingQueue,
   coachingCount,
   coachingLastDate,
   coachingTodayList,
+  coachingLastCoach,
   sessionDate
 }) {
   const prevPairsSet = extractPrevPairKeys(previousRound);
   let pool = presentPlayers.map(p => p.id);
-  let coachee = null;
-  let coach = null;
-  // Decide who coaches: Martin, Keith, or neither. Only one can coach per round.
-  const hasCoach = martinPresent || keithPresent;
-  if (hasCoach && pool.length > 0) {
-    coach = keithPresent ? "Keith" : "Martin";
-    // Shared coaching queue: either coach uses the same list of preferred
-    // trainees. Falls through to fairness-based pick once the queue is
-    // exhausted or everyone on it has been coached today.
-    const queuedPick = (coachingQueue || []).find(id => pool.includes(id) && !(coachingTodayList && coachingTodayList[id]));
-    coachee = queuedPick || pickByLeastRecent(pool, coachingCount, coachingLastDate);
-    pool = pool.filter(id => id !== coachee);
+  // One trainee per coach on the board ({} when nobody's coaching).
+  const coachList = coachIds || [];
+  const coachees = {};
+  if (coachList.length > 0 && pool.length > 0) {
+    const picks = pickCoachees(pool, coachList, {
+      coachingQueue,
+      coachingTodayList,
+      coachingLastDate,
+      coachingCount,
+      coachingLastCoach
+    });
+    coachList.forEach((cid, i) => {
+      coachees[cid] = picks[i] || null;
+    });
+    pool = pool.filter(id => !picks.includes(id));
   }
-  // Keep martinTrainee for backward compat with code that might still reference it.
-  const martinTrainee = coachee;
   const gradeMap = {};
   presentPlayers.forEach(p => {
     gradeMap[p.id] = p.grade;
@@ -844,7 +904,7 @@ function generateRound({
   }
   const orderedMatches = shuffled(matches);
   const peerTables = [];
-  peerTableNumbers(startTable, endTable, martinPresent).forEach(t => {
+  peerTableNumbers(startTable, endTable, coachList.length).forEach(t => {
     if (!retiredTables || !retiredTables.has(t)) peerTables.push(t);
   });
   orderedMatches.forEach((m, idx) => {
@@ -855,10 +915,7 @@ function generateRound({
     index: roundIndex,
     isDoubles,
     matches: orderedMatches,
-    coachee,
-    coach,
-    martinTrainee,
-    martinTable: martinPresent ? startTable : null,
+    coachees,
     resting,
     overflowCount,
     sessionDate
@@ -880,27 +937,9 @@ function applyRoundToHistory(round, hist) {
       }
     }
   });
-  const martinTrainedCount = {
-    ...hist.martinTrainedCount
-  };
-  const martinLastRound = {
-    ...hist.martinLastRound
-  };
-  // Session-only tally (never seeded from lifetime fairness data, unlike
-  // martinTrainedCount above) of who's already trained with Martin today —
-  // used solely to skip someone in his queue once they've had their turn,
-  // so the list doesn't repeat the same person every round.
-  const martinTrainedToday = {
-    ...hist.martinTrainedToday
-  };
-  if (round.martinTrainee) {
-    martinTrainedCount[round.martinTrainee] = (martinTrainedCount[round.martinTrainee] || 0) + 1;
-    martinLastRound[round.martinTrainee] = round.index;
-    martinTrainedToday[round.martinTrainee] = (martinTrainedToday[round.martinTrainee] || 0) + 1;
-  }
-  // Shared coaching history (Martin or Keith). coachingCount is lifetime
-  // fairness; coachingLastDate is the most recent *date* coached (from the
-  // Sheet); coachingTodayList is session-only, resets each session.
+  // Coaching is tracked as ONE history shared by both coaches:
+  // coachingCount (lifetime), coachingLastDate (most recent date coached,
+  // from the Sheet) and coachingTodayList (this session only).
   const coachingCount = {
     ...hist.coachingCount
   };
@@ -910,11 +949,18 @@ function applyRoundToHistory(round, hist) {
   const coachingTodayList = {
     ...hist.coachingTodayList
   };
-  if (round.coachee) {
-    coachingCount[round.coachee] = (coachingCount[round.coachee] || 0) + 1;
-    coachingLastDate[round.coachee] = round.sessionDate || new Date().toISOString().split('T')[0];
-    coachingTodayList[round.coachee] = (coachingTodayList[round.coachee] || 0) + 1;
-  }
+  // Who coached each player most recently (a coach pseudo-id), so the next
+  // pick can prefer a different coach.
+  const coachingLastCoach = {
+    ...hist.coachingLastCoach
+  };
+  Object.entries(round.coachees || {}).forEach(([coachId, trainee]) => {
+    if (!trainee) return;
+    coachingLastCoach[trainee] = coachId;
+    coachingCount[trainee] = (coachingCount[trainee] || 0) + 1;
+    coachingLastDate[trainee] = round.sessionDate || new Date().toISOString().split('T')[0];
+    coachingTodayList[trainee] = (coachingTodayList[trainee] || 0) + 1;
+  });
   const restCount = {
     ...hist.restCount
   };
@@ -928,12 +974,14 @@ function applyRoundToHistory(round, hist) {
   return {
     pairHistory,
     pairLastRound,
-    martinTrainedCount,
-    martinLastRound,
-    martinTrainedToday,
+    // Legacy per-device Martin counts: carried through unchanged (no longer
+    // incremented) — they're folded into the coaching counts once at load.
+    martinTrainedCount: hist.martinTrainedCount,
+    martinLastRound: hist.martinLastRound,
     coachingCount,
     coachingLastDate,
     coachingTodayList,
+    coachingLastCoach,
     restCount,
     lastRestRound
   };
@@ -943,10 +991,10 @@ const emptyHistory = () => ({
   pairLastRound: {},
   martinTrainedCount: {},
   martinLastRound: {},
-  martinTrainedToday: {},
   coachingCount: {},
   coachingLastDate: {},
   coachingTodayList: {},
+  coachingLastCoach: {},
   restCount: {},
   lastRestRound: {}
 });
@@ -962,18 +1010,22 @@ const emptyHistory = () => ({
    demand rather than stored redundantly, so they can never drift out of
    sync with what's actually on the board.
    ============================================================ */
-function buildBoardSlots(round, martinPresent, startTable, endTable, retiredTables) {
+function buildBoardSlots(round, coachIds, startTable, endTable, retiredTables) {
   const slots = [];
-  if (martinPresent) {
+  // One table per coach, side by side from startTable. (isMartin is the
+  // historical name for "is a coach table" — true for Keith's table too.)
+  coachIds.forEach((cid, i) => {
+    const trainee = round.coachees && round.coachees[cid];
     slots.push({
-      key: "martin",
-      table: startTable,
+      key: cid === KEITH_ID ? "keith" : "martin",
+      table: startTable + i,
       isMartin: true,
+      coachId: cid,
       capacity: 4,
-      ids: round.martinTrainee ? [MARTIN_ID, round.martinTrainee] : [MARTIN_ID]
+      ids: trainee ? [cid, trainee] : [cid]
     });
-  }
-  peerTableNumbers(startTable, endTable, martinPresent).forEach(t => {
+  });
+  peerTableNumbers(startTable, endTable, coachIds.length).forEach(t => {
     const match = round.matches.find(m => m.table === t);
     const isRetired = !!(retiredTables && retiredTables.has(t));
     slots.push({
@@ -992,17 +1044,19 @@ function buildBoardSlots(round, martinPresent, startTable, endTable, retiredTabl
 // repeat-avoidance) still expects the older match-shaped data.
 function slotsToMatches(slots) {
   return slots.map(s => ({
-    ids: s.ids.filter(id => id !== MARTIN_ID),
+    ids: s.ids.filter(id => !isCoachId(id)),
     table: s.table
   })).filter(m => m.ids.length > 0);
 }
-function slotsToMartinTrainee(slots) {
-  const martinSlot = slots.find(s => s.isMartin);
-  if (!martinSlot) return null;
-  // Martin's own card may have been dragged around or swapped with
-  // someone, so it's not safe to assume array position — find whichever
-  // id isn't him.
-  return martinSlot.ids.find(id => id !== MARTIN_ID) || null;
+// { coachId: traineeId | null } for each coach table. A coach's own card
+// may have been dragged around or swapped, so the trainee is simply
+// whichever non-coach id is at that coach's table.
+function slotsToCoachees(slots) {
+  const out = {};
+  slots.forEach(s => {
+    if (s.isMartin && s.coachId) out[s.coachId] = s.ids.find(id => !isCoachId(id)) || null;
+  });
+  return out;
 }
 function slotsToResting(slots, presentIds) {
   const onBoard = new Set();
@@ -1013,8 +1067,7 @@ function roundForHistory(round, presentIds) {
   return {
     index: round.index,
     matches: slotsToMatches(round.slots),
-    martinTrainee: slotsToMartinTrainee(round.slots),
-    coachee: slotsToMartinTrainee(round.slots),
+    coachees: slotsToCoachees(round.slots),
     sessionDate: todayDateString(),
     resting: slotsToResting(round.slots, presentIds)
   };
@@ -1032,7 +1085,7 @@ function roundForHistory(round, presentIds) {
  */
 function recordPairingsForRound(slots, pairings) {
   slots.forEach(slot => {
-    const names = slot.ids.map(id => id === MARTIN_ID ? COACH_NAME : id);
+    const names = slot.ids.map(id => isCoachId(id) ? coachNameFor(id) : id);
     for (let i = 0; i < names.length; i++) {
       for (let j = i + 1; j < names.length; j++) {
         const a = names[i];
@@ -1561,9 +1614,19 @@ function SetupScreen({
   onRefreshRoster,
   onStart
 }) {
-  const [coachChoice, setCoachChoice] = useState("martin"); // "martin", "keith", or "neither"
-  const keithCoachPlayer = coachChoice === "keith" ? findKeithPlayer(players) : null;
+  const [coachChoice, setCoachChoice] = useState("martin"); // "martin", "keith", "both" or "neither"
+  const coachTableCount = coachIdsFor(coachChoice).length;
+  const keithCoachPlayer = keithIsCoaching(coachChoice) ? findKeithPlayer(players) : null;
   const selectablePlayers = keithCoachPlayer ? players.filter(p => p.id !== keithCoachPlayer.id) : players;
+  // Picking a coach. If Keith is one of them he comes out of the player
+  // list (he's checked in separately at the end), so un-check him here.
+  const chooseCoach = choice => {
+    setCoachChoice(choice);
+    if (keithIsCoaching(choice)) {
+      const k = findKeithPlayer(players);
+      if (k && presentIds.has(k.id)) onTogglePresent(k.id);
+    }
+  };
   // Optional — who the coach wants to train today, in order (see
   // CoachingQueueModal). Left empty, everything behaves exactly as before:
   // trainees are picked automatically each round. Shared between Martin and Keith.
@@ -1664,7 +1727,7 @@ function SetupScreen({
       marginTop: 14,
       marginBottom: 0
     }
-  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", coachChoice !== "neither" ? ` — ${coachChoice === "martin" ? "Martin" : "Keith"} takes the first one` : ""), /*#__PURE__*/React.createElement("p", {
+  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", coachTableCount === 2 ? " — Martin and Keith take the first two" : coachTableCount === 1 ? ` — ${coachChoice === "martin" ? "Martin" : "Keith"} takes the first one` : ""), /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 12,
@@ -1678,7 +1741,7 @@ function SetupScreen({
       gap: 8,
       marginBottom: 4
     }
-  }, peerTableNumbers(startTable, endTable, coachChoice !== "neither").map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+  }, peerTableNumbers(startTable, endTable, coachTableCount).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
     key: t,
     tableNum: t,
     isRetired: retiredTables.has(t),
@@ -1692,24 +1755,23 @@ function SetupScreen({
     className: "ttc-toggle-group"
   }, /*#__PURE__*/React.createElement("button", {
     className: `ttc-toggle ${coachChoice === "martin" ? "active" : ""}`,
-    onClick: () => setCoachChoice("martin")
+    onClick: () => chooseCoach("martin")
   }, "Martin"), /*#__PURE__*/React.createElement("button", {
     className: `ttc-toggle ${coachChoice === "keith" ? "active" : ""}`,
-    onClick: () => {
-      setCoachChoice("keith");
-      const k = findKeithPlayer(players);
-      if (k && presentIds.has(k.id)) onTogglePresent(k.id);
-    }
+    onClick: () => chooseCoach("keith")
   }, "Keith"), /*#__PURE__*/React.createElement("button", {
+    className: `ttc-toggle ${coachChoice === "both" ? "active" : ""}`,
+    onClick: () => chooseCoach("both")
+  }, "Both"), /*#__PURE__*/React.createElement("button", {
     className: `ttc-toggle ${coachChoice === "neither" ? "active" : ""}`,
-    onClick: () => setCoachChoice("neither")
-  }, "Neither")), keithCoachPlayer && /*#__PURE__*/React.createElement("p", {
+    onClick: () => chooseCoach("neither")
+  }, "Neither")), keithIsCoaching(coachChoice) && (keithCoachPlayer || !rosterLoading && players.length > 0) && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 12,
       margin: "10px 0 0"
     }
-  }, "Keith is coaching, so he's left out of the player list — he's still recorded as attending."), coachChoice !== "neither" && /*#__PURE__*/React.createElement("div", {
+  }, keithCoachPlayer ? "Keith is coaching, so he's left out of the player list — he's still recorded as attending." : "Couldn't find \"Keith\" in the roster — add him to the Players tab (key status Own) so his key still counts toward fees."), coachChoice !== "neither" && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -1810,7 +1872,8 @@ function SetupScreen({
     disabled: !canStart,
     onClick: () => onStart({
       startTable,
-      tableCount,
+      // Never fewer tables than coaches — each coach needs their own.
+      tableCount: Math.max(tableCount, coachTableCount),
       coachChoice,
       coachingQueue: [...coachingQueue],
       roundMinutes,
@@ -1882,7 +1945,7 @@ function TimerRing({
 const DEFAULT_ROUND_SECONDS = 15 * 60;
 const DEFAULT_TOTAL_ROUNDS = 8;
 function nameOf(players, id) {
-  if (id === MARTIN_ID) return COACH_NAME;
+  if (isCoachId(id)) return coachNameFor(id);
   return players.find(p => p.id === id)?.name || "?";
 }
 // Preset colors a player's name can be highlighted with (set via the
@@ -1909,7 +1972,7 @@ function highlightStyleForPlayer(player) {
   } : null;
 }
 function highlightStyleFor(players, id) {
-  if (id === MARTIN_ID) return null;
+  if (isCoachId(id)) return null;
   return highlightStyleForPlayer(players.find(pl => pl.id === id));
 }
 function SlotBoardCard({
@@ -1927,7 +1990,7 @@ function SlotBoardCard({
   // Martin's own pseudo-card doesn't have a grade, so it's excluded from
   // the grade-chip calculation — otherwise his table would misleadingly
   // show as "Mixed" whenever his trainee is a single, known grade.
-  const gradeIds = slot.ids.filter(id => id !== MARTIN_ID);
+  const gradeIds = slot.ids.filter(id => !isCoachId(id));
   let grade = null;
   if (gradeIds.length > 0) {
     const grades = new Set(gradeIds.map(id => playersById[id]?.grade));
@@ -1971,7 +2034,7 @@ function SlotBoardCard({
       color: "var(--orange)",
       marginRight: 6
     }
-  }, `${COACH_NAME}'s table`), chipLabel && /*#__PURE__*/React.createElement("span", {
+  }, `${coachNameFor(slot.coachId)}'s table`), chipLabel && /*#__PURE__*/React.createElement("span", {
     className: `ttc-chip ${chipClass}`
   }, chipLabel), /*#__PURE__*/React.createElement("div", {
     className: "ttc-slot-cards"
@@ -2223,7 +2286,7 @@ function CoachingQueueModal({
       fontSize: 13,
       margin: "0 0 18px"
     }
-  }, "Optional. The coach will train these players in order, one per round; anyone left over is picked automatically based on fairness."), /*#__PURE__*/React.createElement("span", {
+  }, "Optional. Coaches take these players in order \u2014 one trainee per coach each round; anyone left over is picked automatically, favouring whoever has waited longest."), /*#__PURE__*/React.createElement("span", {
     className: "ttc-label"
   }, "Up next (", queue.length, ")"), queue.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
@@ -2357,7 +2420,7 @@ function SessionRosterPanel({
   rosterError,
   usingCache,
   onRefreshRoster,
-  martinPresent,
+  coachTableCount,
   startTable,
   endTable,
   retiredTables,
@@ -2528,7 +2591,7 @@ function SessionRosterPanel({
       flexWrap: "wrap",
       gap: 8
     }
-  }, peerTableNumbers(startTable, endTable, martinPresent).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+  }, peerTableNumbers(startTable, endTable, coachTableCount).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
     key: t,
     tableNum: t,
     isRetired: retiredTables.has(t),
@@ -2684,10 +2747,9 @@ function SessionScreen({
   onRefreshRoster,
   onEnd
 }) {
-  // Who's on the coach table this session — read by nameOf, the table
-  // label, and pairing records (see COACH_NAME).
-  COACH_NAME = config.coachChoice === "keith" ? "Keith" : "Martin";
-  const keithPlayer = config.coachChoice === "keith" ? findKeithPlayer(players) : null;
+  // The coach pseudo-ids on the board this session, in table order.
+  const coachIds = useMemo(() => coachIdsFor(config.coachChoice), [config.coachChoice]);
+  const keithPlayer = keithIsCoaching(config.coachChoice) ? findKeithPlayer(players) : null;
   const rosterPlayers = keithPlayer ? players.filter(p => p.id !== keithPlayer.id) : players;
   // Round length used to be a fixed const derived from setup config; now
   // it's state so it can be edited mid-session (tapping the countdown).
@@ -2715,6 +2777,9 @@ function SessionScreen({
     },
     coachingLastDate: {
       ...(fairnessHistory?.coachingLastDate || {})
+    },
+    coachingLastCoach: {
+      ...(fairnessHistory?.coachingLastCoach || {})
     }
   }));
   const [rounds, setRounds] = useState([]);
@@ -2861,12 +2926,12 @@ function SessionScreen({
   // can never silently strand players who are currently seated there;
   // retire that table instead if it's occupied.
   const handleRemoveTable = () => {
-    if (sessionTableCount <= 1) return;
+    if (sessionTableCount <= Math.max(1, coachIds.length)) return;
     const removingTableNum = endTable;
     const round = rounds[currentRoundIdx];
     const targetSlot = round && round.slots.find(s => s.table === removingTableNum);
     if (targetSlot && targetSlot.ids.length > 0) return;
-    setSessionTableCount(c => Math.max(1, c - 1));
+    setSessionTableCount(c => Math.max(1, coachIds.length, c - 1));
     setRounds(prev => {
       const idx = currentRoundIdx;
       const r = prev[idx];
@@ -2907,6 +2972,19 @@ function SessionScreen({
   // One {name, coach} entry per coached round actually played, for the
   // Coaching History tab.
   const coachingLogRef = useRef([]);
+  // Which round indexes have already been logged, so a round can never be
+  // counted twice (e.g. the bell firing and then End session).
+  const coachingLoggedRoundsRef = useRef(new Set());
+  const logCoachingForRound = (roundIndex, slots) => {
+    if (coachingLoggedRoundsRef.current.has(roundIndex)) return;
+    coachingLoggedRoundsRef.current.add(roundIndex);
+    Object.entries(slotsToCoachees(slots)).forEach(([cid, trainee]) => {
+      if (trainee) coachingLogRef.current.push({
+        name: trainee,
+        coach: coachNameFor(cid)
+      });
+    });
+  };
   // Shown every time a session ends (voluntarily via "End session" or by
   // finishing all rounds), regardless of whether the background sync to
   // the Sheet succeeded — that can't be reliably detected from here. Null
@@ -2915,12 +2993,12 @@ function SessionScreen({
   const finalizeSessionOnce = useCallback(finalHistory => {
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
-    const keithP = config.coachChoice === "keith" ? findKeithPlayer(players) : null;
+    const keithP = keithIsCoaching(config.coachChoice) ? findKeithPlayer(players) : null;
     // Keith (when coaching) never enters presentIds, so add him explicitly:
     // he's present all session and, as a key holder, still counts for fees.
     const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id) || keithP && p.id === keithP.id);
     const pairingNames = attendedPlayers.filter(p => !keithP || p.id !== keithP.id).map(p => p.name);
-    if (config.coachChoice !== "neither") pairingNames.push(COACH_NAME);
+    coachIdsFor(config.coachChoice).forEach(cid => pairingNames.push(coachNameFor(cid)));
     const pairings = pairingNames.map(name => ({
       name,
       partners: pairingsRef.current[name] ? [...pairingsRef.current[name]].sort() : []
@@ -2928,7 +3006,7 @@ function SessionScreen({
     // Build coaching history: one entry per round where someone was coached
     const coachingData = [...coachingLogRef.current];
     sendAttendance(attendedPlayers, config.coachChoice, pairings, coachingData);
-    if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount, finalHistory.coachingCount, finalHistory.coachingLastDate);
+    if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount, finalHistory.coachingCount, finalHistory.coachingLastDate, finalHistory.coachingLastCoach);
     setSessionSummary({
       date: todayDateString(),
       players: attendedPlayers.map(p => ({
@@ -2945,8 +3023,7 @@ function SessionScreen({
     initedRef.current = true;
     const r0 = generateRound({
       presentPlayers,
-      martinPresent: config.coachChoice !== "neither",
-      keithPresent: config.coachChoice === "keith",
+      coachIds,
       isDoubles: false,
       startTable,
       endTable,
@@ -2961,7 +3038,7 @@ function SessionScreen({
     });
     setRounds([{
       index: 0,
-      slots: buildBoardSlots(r0, config.coachChoice !== "neither", startTable, endTable, retiredTables)
+      slots: buildBoardSlots(r0, coachIds, startTable, endTable, retiredTables)
     }]);
     try {
       if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(() => {});
@@ -2990,11 +3067,7 @@ function SessionScreen({
       const finishedRound = rounds[roundIdx];
       const finishedForHistory = roundForHistory(finishedRound, presentIds);
       recordPairingsForRound(finishedRound.slots, pairingsRef.current);
-      const coachedNow = slotsToMartinTrainee(finishedRound.slots);
-      if (coachedNow) coachingLogRef.current.push({
-        name: coachedNow,
-        coach: COACH_NAME
-      });
+      logCoachingForRound(roundIdx, finishedRound.slots);
       const updatedHistory = applyRoundToHistory(finishedForHistory, history);
       setHistory(updatedHistory);
       const isLast = roundIdx >= TOTAL_ROUNDS - 1;
@@ -3005,8 +3078,7 @@ function SessionScreen({
       }
       const nextRound = generateRound({
         presentPlayers,
-        martinPresent: config.coachChoice !== "neither",
-        keithPresent: config.coachChoice === "keith",
+        coachIds,
         isDoubles: isDoublesMode,
         startTable,
         endTable,
@@ -3022,7 +3094,7 @@ function SessionScreen({
       });
       setRounds(prev => [...prev, {
         index: roundIdx + 1,
-        slots: buildBoardSlots(nextRound, config.coachChoice !== "neither", startTable, endTable, retiredTables)
+        slots: buildBoardSlots(nextRound, coachIds, startTable, endTable, retiredTables)
       }]);
       setPhase("break");
     }
@@ -3078,11 +3150,7 @@ function SessionScreen({
     let finalHistory = history;
     if (phase === "playing" && rounds[roundIdx]) {
       recordPairingsForRound(rounds[roundIdx].slots, pairingsRef.current);
-      const coachedNow = slotsToMartinTrainee(rounds[roundIdx].slots);
-      if (coachedNow) coachingLogRef.current.push({
-        name: coachedNow,
-        coach: COACH_NAME
-      });
+      logCoachingForRound(roundIdx, rounds[roundIdx].slots);
       finalHistory = applyRoundToHistory(roundForHistory(rounds[roundIdx], presentIds), history);
     }
     finalizeSessionOnce(finalHistory);
@@ -3112,8 +3180,7 @@ function SessionScreen({
     const nextRetiredTables = overrides.retiredTables !== undefined ? overrides.retiredTables : retiredTables;
     const nextRound = generateRound({
       presentPlayers: nextPresentPlayers,
-      martinPresent: config.coachChoice !== "neither",
-      keithPresent: config.coachChoice === "keith",
+      coachIds,
       isDoubles: nextIsDoubles,
       startTable,
       endTable,
@@ -3131,7 +3198,7 @@ function SessionScreen({
       const next = [...prev];
       next[roundIdx + 1] = {
         index: roundIdx + 1,
-        slots: buildBoardSlots(nextRound, config.coachChoice !== "neither", startTable, endTable, nextRetiredTables)
+        slots: buildBoardSlots(nextRound, coachIds, startTable, endTable, nextRetiredTables)
       };
       return next;
     });
@@ -3151,8 +3218,7 @@ function SessionScreen({
     const nextRetiredTables = overrides.retiredTables !== undefined ? overrides.retiredTables : retiredTables;
     const redrawnRound = generateRound({
       presentPlayers: nextPresentPlayers,
-      martinPresent: config.coachChoice !== "neither",
-      keithPresent: config.coachChoice === "keith",
+      coachIds,
       isDoubles: nextIsDoubles,
       startTable,
       endTable,
@@ -3170,7 +3236,7 @@ function SessionScreen({
       const next = [...prev];
       next[roundIdx] = {
         index: roundIdx,
-        slots: buildBoardSlots(redrawnRound, config.coachChoice !== "neither", startTable, endTable, nextRetiredTables)
+        slots: buildBoardSlots(redrawnRound, coachIds, startTable, endTable, nextRetiredTables)
       };
       return next;
     });
@@ -3334,11 +3400,11 @@ function SessionScreen({
   const handleBoardCardTap = playerId => {
     if (suppressClickRef.current) return;
     if (heldPlayerId === null) {
-      if (playerId === MARTIN_ID) {
+      if (isCoachId(playerId)) {
         setActivePlayerAction({
           player: {
-            id: MARTIN_ID,
-            name: COACH_NAME
+            id: playerId,
+            name: coachNameFor(playerId)
           },
           mode: "martin"
         });
@@ -3577,7 +3643,7 @@ function SessionScreen({
     rosterError: rosterError,
     usingCache: usingCache,
     onRefreshRoster: onRefreshRoster,
-    martinPresent: config.coachChoice !== "neither",
+    coachTableCount: coachIds.length,
     startTable: startTable,
     endTable: endTable,
     retiredTables: retiredTables,
@@ -3675,7 +3741,8 @@ function App() {
     martinCount: {},
     restCount: {},
     coachingCount: {},
-    coachingLastDate: {}
+    coachingLastDate: {},
+    coachingLastCoach: {}
   });
   const loadRoster = useCallback(async () => {
     setRosterLoading(true);
@@ -3724,22 +3791,39 @@ function App() {
       // doGet returns coachingHistory rows (Name | Coach | Date),
       // so we build up coachingCount (lifetime total) and coachingLastDate
       // (most recent date, as string).
-      const coachingRows = window.coachingHistoryFromSheet || [];
+      // Rows only exist on window if the Sheet fetch succeeded; otherwise
+      // fall back to the copy saved last time rather than silently starting
+      // the fairness history from scratch.
+      let coachingRows = window.coachingHistoryFromSheet;
+      if (coachingRows) saveStorage(COACHING_CACHE_KEY, coachingRows);else coachingRows = (await loadStorage(COACHING_CACHE_KEY)) || [];
       const coachingCount = {};
       const coachingLastDate = {};
+      const coachingLastCoach = {};
       coachingRows.forEach(row => {
-        const { name, date } = row;
-        if (name) {
-          coachingCount[name] = (coachingCount[name] || 0) + 1;
-          // Always overwrite with the latest date (rows are in append order,
-          // so the last one is the most recent).
+        const name = row.name;
+        const date = row.date;
+        if (!name) return;
+        coachingCount[name] = (coachingCount[name] || 0) + 1;
+        // Keep the NEWEST date (ISO strings sort correctly) — rows aren't
+        // guaranteed to be in date order once a day has been re-sent. Rows
+        // from the same day are in the order they were logged, so the last
+        // one wins and tells us which coach had them most recently.
+        if (date && (!coachingLastDate[name] || date >= coachingLastDate[name])) {
           coachingLastDate[name] = date;
+          coachingLastCoach[name] = String(row.coach).trim().toLowerCase() === "keith" ? KEITH_ID : MARTIN_ID;
         }
+      });
+      // Combine in the older per-device Martin-only counts (from before the
+      // Coaching History tab existed). They have no dates, so they only
+      // ever break ties — they can't outrank a real last-coached date.
+      Object.entries(savedFairness && savedFairness.martinCount || {}).forEach(([name, n]) => {
+        coachingCount[name] = (coachingCount[name] || 0) + n;
       });
       setFairnessHistory(prev => ({
         ...prev,
         coachingCount,
-        coachingLastDate
+        coachingLastDate,
+        coachingLastCoach
       }));
       setLoaded(true);
     })();
@@ -3775,7 +3859,7 @@ function App() {
     ...rosterProps,
     config: config,
     fairnessHistory: fairnessHistory,
-    onPersistFairness: (martinCount, restCount, coachingCount, coachingLastDate) => {
+    onPersistFairness: (martinCount, restCount, coachingCount, coachingLastDate, coachingLastCoach) => {
       setFairnessHistory(prev => ({
         martinCount: {
           ...prev.martinCount,
@@ -3792,6 +3876,10 @@ function App() {
         coachingLastDate: {
           ...prev.coachingLastDate,
           ...coachingLastDate
+        },
+        coachingLastCoach: {
+          ...prev.coachingLastCoach,
+          ...coachingLastCoach
         }
       }));
     },
