@@ -519,7 +519,7 @@ function savePlayers() {
   state.players = [];
   for (let i = 1; i <= 32; i++) {
     const v = (document.getElementById(`p${i}`)?.value||'').trim();
-    state.players.push(v || `Player ${i}`);
+    state.players.push(v || null); // null = empty slot = BYE in draw
   }
   saveLocalState(); showToast('Players saved!');
 }
@@ -547,10 +547,13 @@ async function fetchFromSpinSquad() {
     const data = await res.json();
     const players = (data.players || []).sort((a,b) => a.rank - b.rank);
     if (!players.length) throw new Error('No players returned');
+    // Fill inputs and state.players: named players first, rest null
+    state.players = [];
     for (let i = 1; i <= 32; i++) {
       const el = document.getElementById('p' + i);
-      if (!el) continue;
-      el.value = players[i-1] ? players[i-1].name : '';
+      const name = players[i-1] ? players[i-1].name : '';
+      if (el) el.value = name;
+      state.players.push(name || null);
     }
     statusEl.className = 'fetch-status ok';
     statusEl.innerHTML = `✓ <span>${players.length} players loaded from SpinSquad. Fill remaining slots manually if needed.</span>`;
@@ -605,10 +608,12 @@ function previewImport() {
 }
 function confirmImport() {
   if (!_importedPlayers.length) { showToast('No players to import.'); return; }
+  state.players = [];
   for (let i = 1; i <= 32; i++) {
     const el = document.getElementById(`p${i}`);
-    if (!el) continue;
-    el.value = _importedPlayers[i-1] ? _importedPlayers[i-1].name : '';
+    const name = _importedPlayers[i-1] ? _importedPlayers[i-1].name : '';
+    if (el) el.value = name;
+    state.players.push(name || null);
   }
   document.getElementById('import-overlay').classList.remove('open');
   showToast(`${_importedPlayers.length} players imported!`);
@@ -700,7 +705,7 @@ function buildSeededSlots(numPlayers) {
 function startDraw() {
   savePlayers(); saveSchedule();
 
-  const numPlayers = state.players.filter(p => p && p.trim()).length;
+  const numPlayers = state.players.filter(p => p && p.trim() !== '').length;
   const drawSlots = buildSeededSlots(numPlayers); // array of 32 names or 'BYE'
 
   const rounds = [];
