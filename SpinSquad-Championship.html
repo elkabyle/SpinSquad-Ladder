@@ -195,6 +195,11 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
   100% { transform: scaleX(1); opacity: 0; }
 }
 
+
+/* BYE matches */
+.bye-match { opacity: 0.45; }
+.bye-match .player-slot { cursor: default; }
+
 </style>
 </head>
 <body>
@@ -619,62 +624,98 @@ function shuffle(arr) {
   return a;
 }
 
-function buildSeededSlots() {
-  // 32 bracket positions split into 8 sections of 4 slots each.
-  // sections 0-3 = half A, sections 4-7 = half B.
-  const sections = Array.from({length:8}, (_,i) => [i*4, i*4+1, i*4+2, i*4+3]);
-  const slots = new Array(32).fill(null);
+function buildSeededSlots(numPlayers) {
+  // Standard ITTF seeding for a 32-draw.
+  // Returns an array of 32 strings: player name or 'BYE'.
+  //
+  // Fixed seeded positions (1-indexed slots):
+  //   Seed 1 → slot 1
+  //   Seed 2 → slot 32
+  //   Seeds 3&4 → slots 9 and 25 (randomly assigned)
+  //   Seeds 5-8 → slots 5, 13, 21, 29 (randomly assigned)
+  //
+  // BYE placement (32 - numPlayers byes total):
+  //   First 8 BYEs go adjacent to seeds 1-8 (their R1 opponent slot)
+  //   Remaining BYEs distributed randomly among leftover slots
+  //
+  // Unseeded players (seeds 9+) fill remaining non-BYE slots randomly.
 
-  function placeInSection(seed, sectionIdx) {
-    const available = sections[sectionIdx].filter(s => slots[s] === null);
-    const chosen = available[Math.floor(Math.random() * available.length)];
-    slots[chosen] = seed;
-  }
+  const slots = new Array(32).fill(null); // 0-indexed internally, 1-indexed in comments
 
-  // Shuffle section order within each half
-  const halfA = shuffle([0,1,2,3]);
-  const halfB = shuffle([4,5,6,7]);
+  const set = (slot1, val) => { slots[slot1 - 1] = val; };
 
-  // Seeds 1 & 2: one per half
-  if (Math.random() < 0.5) { placeInSection(1, halfA[0]); placeInSection(2, halfB[0]); }
-  else                      { placeInSection(2, halfA[0]); placeInSection(1, halfB[0]); }
+  // Place seeds 1 & 2 in fixed positions
+  const named = (state.players || []).slice();
+  const getPlayer = (seed) => named[seed - 1] || null;
 
-  // Seeds 3 & 4: opposite quarter to 1 & 2 within each half
-  const [s3,s4] = Math.random() < 0.5 ? [3,4] : [4,3];
-  placeInSection(s3, halfA[2]);
-  placeInSection(s4, halfB[2]);
+  set(1,  getPlayer(1));
+  set(32, getPlayer(2));
 
-  // Seeds 5–8: one per quarter
-  const seeds5to8 = shuffle([5,6,7,8]);
-  [[halfA[0],halfA[1]], [halfA[2],halfA[3]], [halfB[0],halfB[1]], [halfB[2],halfB[3]]]
-    .forEach((quarter, i) => {
-      placeInSection(seeds5to8[i], shuffle(quarter)[0]);
-    });
+  // Seeds 3&4: randomly assign to slots 9 and 25
+  const s3s4 = shuffle([getPlayer(3), getPlayer(4)]);
+  set(9,  s3s4[0]);
+  set(25, s3s4[1]);
 
-  // Seeds 9–16: one per section
-  const seeds9to16 = shuffle([9,10,11,12,13,14,15,16]);
-  [...halfA, ...halfB].forEach((sectionIdx, i) => {
-    placeInSection(seeds9to16[i], sectionIdx);
+  // Seeds 5-8: randomly assign to slots 5, 13, 21, 29
+  const s5to8 = shuffle([getPlayer(5), getPlayer(6), getPlayer(7), getPlayer(8)]);
+  [5, 13, 21, 29].forEach((slot, i) => set(slot, s5to8[i]));
+
+  // Fixed BYE slots (adjacent to seeds 1-8)
+  // Seed 1 at slot 1 → BYE at slot 2
+  // Seed 2 at slot 32 → BYE at slot 31
+  // Seed 3 at slot 9 → BYE at slot 10
+  // Seed 4 at slot 25 → BYE at slot 26
+  // Seed 5 at slot 5 → BYE at slot 6
+  // Seed 6 at slot 13 → BYE at slot 14
+  // Seed 7 at slot 21 → BYE at slot 22
+  // Seed 8 at slot 29 → BYE at slot 30
+  const fixedByeSlots = [2, 31, 10, 26, 6, 14, 22, 30];
+  const numByes = 32 - numPlayers;
+  
+  // Place as many fixed BYEs as needed (up to 8)
+  const byesToPlace = Math.min(numByes, 8);
+  for (let i = 0; i < byesToPlace; i++) set(fixedByeSlots[i], 'BYE');
+
+  // Remaining slots (not yet assigned)
+  const freeSlots = shuffle(
+    slots.map((v, i) => v === null ? i + 1 : null).filter(Boolean)
+  );
+
+  // Remaining BYEs (beyond the 8 fixed ones)
+  const extraByes = Math.max(0, numByes - 8);
+
+  // Seeds 9+ fill free slots; extra BYEs also go into free slots
+  const unseeded = shuffle(
+    Array.from({ length: Math.max(0, numPlayers - 8) }, (_, i) => getPlayer(i + 9))
+      .filter(Boolean)
+  );
+  const fillItems = shuffle([...unseeded, ...Array(extraByes).fill('BYE')]);
+  freeSlots.forEach((slot, i) => {
+    if (i < fillItems.length) set(slot, fillItems[i]);
   });
 
-  // Seeds 17–32: fill remaining slots randomly
-  const seeds17to32 = shuffle([17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]);
-  const emptySlots = shuffle(slots.map((v,i) => v===null ? i : -1).filter(i => i !== -1));
-  emptySlots.forEach((slotIdx, i) => { slots[slotIdx] = seeds17to32[i]; });
-
-  return slots;
+  return slots; // array of 32 player names / 'BYE' / null
 }
 
 function startDraw() {
   savePlayers(); saveSchedule();
-  const named = state.players.map(p => (p && p.trim() && !p.startsWith('Player ')) ? p.trim() : null);
-  const slots = buildSeededSlots();
-  const seeded = slots.map(s => named[s-1] || `BYE ${s}`);
+
+  const numPlayers = state.players.filter(p => p && p.trim()).length;
+  const drawSlots = buildSeededSlots(numPlayers); // array of 32 names or 'BYE'
 
   const rounds = [];
   const r0 = [];
   for (let i = 0; i < 32; i += 2) {
-    r0.push({ id:`m_0_${i/2}`, p1:seeded[i], p2:seeded[i+1], winner:null, seed1:slots[i], seed2:slots[i+1] });
+    const p1 = drawSlots[i]   || 'BYE';
+    const p2 = drawSlots[i+1] || 'BYE';
+    // Auto-advance if one side is BYE
+    const autoWinner = p1 === 'BYE' ? p2 : p2 === 'BYE' ? p1 : null;
+    r0.push({
+      id: `m_0_${i/2}`,
+      p1, p2,
+      winner: autoWinner,
+      isBye: !!(autoWinner)
+    });
   }
   rounds.push(r0);
   for (let r = 1; r < 5; r++) {
@@ -692,12 +733,9 @@ function startDraw() {
   showLoadingIndicator(true);
   saveRemoteBracket().then(ok => {
     showLoadingIndicator(false);
-        showToast(ok ? 'Draw saved! Players can now see the bracket.' : 'Draw saved locally — sheet sync failed.');
+    showToast(ok ? 'Draw saved! Players can now see the bracket.' : 'Draw saved locally — sheet sync failed.');
   });
-}
-
-function resetTournament() {
-  if (!confirm('Reset the draw? All results will be lost. Player names will be kept.')) return;
+}rn;
   state.drawn = false; state.bracket = null;
   saveLocalState();
   // Clear the sheet too, then reload
@@ -767,18 +805,19 @@ function renderBracket() {
 
       const p1 = m.p1 || 'TBD';
       const p2 = m.p2 || 'TBD';
-      const isPossible = !!(m.p1 && m.p2);
+      const isBye     = !!(m.isBye);
+      const isPossible = !!(m.p1 && m.p2) && !isBye;
       const clickable  = canClick && isPossible;
 
       wrap.innerHTML = `
-        <div class="match${clickable ? ' clickable' : ''}"${clickable ? ` onclick="openModal('${m.id}')"` : ''} title="${clickable?'Click to enter winner':''}">
+        <div class="match${clickable ? ' clickable' : ''}${isBye ? ' bye-match' : ''}"${clickable ? ` onclick="openModal('${m.id}')"` : ''} title="${clickable?'Click to enter winner':isBye?'BYE — auto advance':''}" >
           <span class="match-number">${ri===0 ? '#'+(mi+1) : ''}</span>
           <div class="${slotCls(m,'p1')}">
-            ${ri===0 ? `<span class="seed-badge">${m.seed1}</span>` : ''}
+            ${ri===0 ? `<span class="seed-badge">${m.seed1||''}</span>` : ''}
             <span class="player-name">${p1}</span>
           </div>
           <div class="${slotCls(m,'p2')}">
-            ${ri===0 ? `<span class="seed-badge">${m.seed2}</span>` : ''}
+            ${ri===0 ? `<span class="seed-badge">${m.seed2||''}</span>` : ''}
             <span class="player-name">${p2}</span>
           </div>
         </div>`;
