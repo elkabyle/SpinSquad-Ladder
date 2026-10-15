@@ -516,11 +516,33 @@ function fillInputsFromState() {
   Object.entries(state.schedule||{}).forEach(([k,v]) => { const el = document.getElementById(`sched_${k}`); if(el) el.value = v; });
 }
 function savePlayers() {
-  state.players = [];
+  // Read names from inputs in display order (rank 1 first = input p1)
+  const inputNames = [];
   for (let i = 1; i <= 32; i++) {
     const v = (document.getElementById(`p${i}`)?.value||'').trim();
-    state.players.push(v || null); // null = empty slot = BYE in draw
+    inputNames.push(v || null);
   }
+  // If we have ranked data from API/import, sort by rank and update
+  // Otherwise just use input order as-is (manual entry)
+  if (state.playerRanks && state.playerRanks.length) {
+    // Merge: update ranks with any manual edits, keep rank order
+    state.playerRanks = state.playerRanks.filter(p =>
+      inputNames.includes(p.name)
+    );
+    // Add any manually-typed names not in ranked list (no rank = high number)
+    inputNames.forEach(name => {
+      if (name && !state.playerRanks.find(p => p.name === name)) {
+        state.playerRanks.push({ name, rank: 999 });
+      }
+    });
+    state.playerRanks.sort((a, b) => a.rank - b.rank);
+  } else {
+    // No rank data — treat input order as rank order
+    state.playerRanks = inputNames
+      .filter(Boolean)
+      .map((name, i) => ({ name, rank: i + 1 }));
+  }
+  state.players = inputNames; // keep for display/backwards compat
   saveLocalState(); showToast('Players saved!');
 }
 function saveSchedule() {
@@ -547,13 +569,13 @@ async function fetchFromSpinSquad() {
     const data = await res.json();
     const players = (data.players || []).sort((a,b) => a.rank - b.rank);
     if (!players.length) throw new Error('No players returned');
-    // Fill inputs and state.players: named players first, rest null
-    state.players = [];
+    // Store full player objects (name + rank) so draw can sort correctly
+    state.playerRanks = players.map(p => ({ name: p.name, rank: p.rank }));
+    // Fill inputs for display (rank order, best first)
     for (let i = 1; i <= 32; i++) {
       const el = document.getElementById('p' + i);
       const name = players[i-1] ? players[i-1].name : '';
       if (el) el.value = name;
-      state.players.push(name || null);
     }
     statusEl.className = 'fetch-status ok';
     statusEl.innerHTML = `✓ <span>${players.length} players loaded from SpinSquad. Fill remaining slots manually if needed.</span>`;
@@ -608,12 +630,12 @@ function previewImport() {
 }
 function confirmImport() {
   if (!_importedPlayers.length) { showToast('No players to import.'); return; }
-  state.players = [];
+  // Store ranked player objects
+  state.playerRanks = _importedPlayers.map(p => ({ name: p.name, rank: p.rank }));
   for (let i = 1; i <= 32; i++) {
     const el = document.getElementById(`p${i}`);
     const name = _importedPlayers[i-1] ? _importedPlayers[i-1].name : '';
     if (el) el.value = name;
-    state.players.push(name || null);
   }
   document.getElementById('import-overlay').classList.remove('open');
   showToast(`${_importedPlayers.length} players imported!`);
@@ -649,9 +671,11 @@ function buildSeededSlots(numPlayers) {
 
   const set = (slot1, val) => { slots[slot1 - 1] = val; };
 
-  // Place seeds 1 & 2 in fixed positions
-  const named = (state.players || []).slice();
-  const getPlayer = (seed) => named[seed - 1] || null;
+  // Use playerRanks sorted by rank (rank 1 = best = seed 1)
+  const rankedPlayers = [...(state.playerRanks || [])]
+    .filter(p => p && p.name)
+    .sort((a, b) => a.rank - b.rank);
+  const getPlayer = (seed) => rankedPlayers[seed - 1] ? rankedPlayers[seed - 1].name : null;
 
   set(1,  getPlayer(1));
   set(32, getPlayer(2));
@@ -705,8 +729,8 @@ function buildSeededSlots(numPlayers) {
 function startDraw() {
   savePlayers(); saveSchedule();
 
-  const numPlayers = state.players.filter(p => p && p.trim() !== '').length;
-  const drawSlots = buildSeededSlots(numPlayers); // array of 32 names or 'BYE'
+  const numPlayers = (state.playerRanks || []).filter(p => p && p.name).length;
+  const drawSlots = buildSeededSlots(numPlayers);
 
   const rounds = [];
   const r0 = [];
