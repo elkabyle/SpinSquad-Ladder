@@ -651,99 +651,80 @@ function shuffle(arr) {
   return a;
 }
 
-function buildSeededSlots(numPlayers) {
-  // Standard ITTF seeding for a 32-draw.
-  // Returns an array of 32 strings: player name or 'BYE'.
+function buildSeededSlots() {
+  // Replicates the coach's Pro Kennex draw sheet for a 32-draw.
+  // Players are ranked by the ladder "Rank" value (column C): lowest = best = seed 1.
   //
-  // Fixed seeded positions (1-indexed slots):
-  //   Seed 1 → slot 1
-  //   Seed 2 → slot 32
-  //   Seeds 3&4 → slots 9 and 25 (randomly assigned)
-  //   Seeds 5-8 → slots 5, 13, 21, 29 (randomly assigned)
+  // Seed positions printed on the sheet (slot numbers 1-32):
+  //   Seed 1        -> slot 1
+  //   Seed 2        -> slot 32
+  //   Seeds 3 / 4   -> slots 9 and 24   (drawn between the two)
+  //   Seeds 5 / 6   -> slots 16 and 17  (drawn between the two)
+  //   Seeds 7 / 8   -> slots 8 and 25   (drawn between the two)
+  // Everyone else (ladder rank 9+) is drawn randomly into the remaining slots.
   //
-  // BYE placement (32 - numPlayers byes total):
-  //   First 8 BYEs go adjacent to seeds 1-8 (their R1 opponent slot)
-  //   Remaining BYEs distributed randomly among leftover slots
-  //
-  // Unseeded players (seeds 9+) fill remaining non-BYE slots randomly.
+  // BYEs (32 - number of players) go to fixed slots, in this priority order,
+  // alternating top/bottom half. For 23 players this gives the coach's 9 BYEs:
+  // slots 2, 10, 11, 13, 15 (top) and 20, 21, 26, 31 (bottom).
+  const BYE_ORDER = [2, 31, 10, 26, 15, 20, 11, 21, 13, 18, 7, 23];
 
-  const slots = new Array(32).fill(null); // 0-indexed internally, 1-indexed in comments
-
-  const set = (slot1, val) => { slots[slot1 - 1] = val; };
-
-  // Use playerRanks sorted by rank (rank 1 = best = seed 1)
-  const rankedPlayers = [...(state.playerRanks || [])]
+  const ranked = [...(state.playerRanks || [])]
     .filter(p => p && p.name)
     .sort((a, b) => a.rank - b.rank);
-  const getPlayer = (seed) => rankedPlayers[seed - 1] ? rankedPlayers[seed - 1].name : null;
+  const seed = n => ranked[n - 1] ? ranked[n - 1].name : null;
 
-  set(1,  getPlayer(1));
-  set(32, getPlayer(2));
+  const slots = new Array(32).fill(null);
+  const set = (slot1, val) => { slots[slot1 - 1] = val; };
 
-  // Seeds 3&4: randomly assign to slots 9 and 25
-  const s3s4 = shuffle([getPlayer(3), getPlayer(4)]);
-  set(9,  s3s4[0]);
-  set(25, s3s4[1]);
+  set(1,  seed(1));
+  set(32, seed(2));
+  const s34 = shuffle([seed(3), seed(4)]); set(9,  s34[0]); set(24, s34[1]);
+  const s56 = shuffle([seed(5), seed(6)]); set(16, s56[0]); set(17, s56[1]);
+  const s78 = shuffle([seed(7), seed(8)]); set(8,  s78[0]); set(25, s78[1]);
 
-  // Seeds 5-8: randomly assign to slots 5, 13, 21, 29
-  const s5to8 = shuffle([getPlayer(5), getPlayer(6), getPlayer(7), getPlayer(8)]);
-  [5, 13, 21, 29].forEach((slot, i) => set(slot, s5to8[i]));
+  const numByes = Math.max(0, 32 - ranked.length);
+  let placed = 0;
+  for (const s of BYE_ORDER) {
+    if (placed >= numByes) break;
+    set(s, 'BYE'); placed++;
+  }
 
-  // Fixed BYE slots (adjacent to seeds 1-8)
-  // Seed 1 at slot 1 → BYE at slot 2
-  // Seed 2 at slot 32 → BYE at slot 31
-  // Seed 3 at slot 9 → BYE at slot 10
-  // Seed 4 at slot 25 → BYE at slot 26
-  // Seed 5 at slot 5 → BYE at slot 6
-  // Seed 6 at slot 13 → BYE at slot 14
-  // Seed 7 at slot 21 → BYE at slot 22
-  // Seed 8 at slot 29 → BYE at slot 30
-  const fixedByeSlots = [2, 31, 10, 26, 6, 14, 22, 30];
-  const numByes = 32 - numPlayers;
-  
-  // Place as many fixed BYEs as needed (up to 8)
-  const byesToPlace = Math.min(numByes, 8);
-  for (let i = 0; i < byesToPlace; i++) set(fixedByeSlots[i], 'BYE');
+  // Any further BYEs (fewer than 21 players) go to random free slots
+  let free = shuffle(slots.map((v, i) => v === null ? i + 1 : null).filter(Boolean));
+  while (placed < numByes && free.length) { set(free.shift(), 'BYE'); placed++; }
 
-  // Remaining slots (not yet assigned)
-  const freeSlots = shuffle(
-    slots.map((v, i) => v === null ? i + 1 : null).filter(Boolean)
-  );
+  // Unseeded players fill the rest at random
+  const unseeded = shuffle(ranked.slice(8).map(p => p.name));
+  free.forEach((s, i) => set(s, unseeded[i] || 'BYE'));
 
-  // Remaining BYEs (beyond the 8 fixed ones)
-  const extraByes = Math.max(0, numByes - 8);
-
-  // Seeds 9+ fill free slots; extra BYEs also go into free slots
-  const unseeded = shuffle(
-    Array.from({ length: Math.max(0, numPlayers - 8) }, (_, i) => getPlayer(i + 9))
-      .filter(Boolean)
-  );
-  const fillItems = shuffle([...unseeded, ...Array(extraByes).fill('BYE')]);
-  freeSlots.forEach((slot, i) => {
-    if (i < fillItems.length) set(slot, fillItems[i]);
-  });
-
-  return slots; // array of 32 player names / 'BYE' / null
+  return slots; // 32 entries: player name or 'BYE'
 }
 
 function startDraw() {
   savePlayers(); saveSchedule();
 
   const numPlayers = (state.playerRanks || []).filter(p => p && p.name).length;
-  const drawSlots = buildSeededSlots(numPlayers);
+  if (numPlayers < 2) { showToast('Add at least 2 players first.'); return; }
+  const drawSlots = buildSeededSlots();
+
+  // Ladder rank shown next to each name in round 1 (blank for manual extras / BYE)
+  const rankOf = name => {
+    const p = (state.playerRanks || []).find(x => x.name === name);
+    return p && p.rank < 999 ? p.rank : '';
+  };
 
   const rounds = [];
   const r0 = [];
   for (let i = 0; i < 32; i += 2) {
-    const p1 = drawSlots[i]   || 'BYE';
-    const p2 = drawSlots[i+1] || 'BYE';
-    // Auto-advance if one side is BYE
+    const p1 = drawSlots[i];
+    const p2 = drawSlots[i+1];
     const autoWinner = p1 === 'BYE' ? p2 : p2 === 'BYE' ? p1 : null;
     r0.push({
       id: `m_0_${i/2}`,
       p1, p2,
       winner: autoWinner,
-      isBye: !!(autoWinner)
+      isBye: !!autoWinner,
+      seed1: rankOf(p1), seed2: rankOf(p2)
     });
   }
   rounds.push(r0);
@@ -781,7 +762,13 @@ function updateNextRounds() {
       const prev = rounds[ri-1];
       m.p1 = prev[mi*2].winner   || null;
       m.p2 = prev[mi*2+1].winner || null;
-      if (m.winner && m.winner !== m.p1 && m.winner !== m.p2) m.winner = null;
+      m.isBye = false;
+      if (m.p1 === 'BYE' || m.p2 === 'BYE') {
+        m.winner = m.p1 === 'BYE' ? m.p2 : m.p1;
+        m.isBye = !!m.winner;
+      } else if (m.winner && m.winner !== m.p1 && m.winner !== m.p2) {
+        m.winner = null;
+      }
     });
   }
 }
@@ -924,7 +911,7 @@ function updateStats() {
   if (!state.bracket) return;
   const rounds = state.bracket.rounds;
   let played=0, total=0;
-  rounds.forEach(r => r.forEach(m => { if(m.p1&&m.p2){total++; if(m.winner) played++;} }));
+  rounds.forEach(r => r.forEach(m => { if(m.p1&&m.p2&&!m.isBye){total++; if(m.winner) played++;} }));
   const champion = rounds[4][0].winner;
   document.getElementById('stats-bar').innerHTML = `
     <div class="stat"><span class="stat-val">${played}</span><span class="stat-label">Played</span></div>
