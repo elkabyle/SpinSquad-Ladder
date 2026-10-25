@@ -502,6 +502,12 @@ const coachIdsFor = choice => choice === "both" ? [MARTIN_ID, KEITH_ID] : choice
 // Keith is a roster player (an Own-key holder) who also coaches, so
 // whenever he's on a coach table he must be kept out of the player pool.
 const keithIsCoaching = choice => choice === "keith" || choice === "both";
+// A round only counts toward the pairing / coaching record once it has really
+// been played for this long (or for its whole length, if it is shorter).
+// Anyone who leaves after that point keeps their seat in the record, and a
+// round cut short before it (Skip round / End session) isn't recorded at all.
+const RECORD_AFTER_SECONDS = 300;
+const recordThreshold = roundSeconds => Math.min(RECORD_AFTER_SECONDS, roundSeconds);
 // Keith is also a regular roster player (a key holder). While he's the
 // coach he's kept out of the player list entirely — not selectable, not
 // draggable, not paired — but still recorded as attending at session end.
@@ -860,6 +866,7 @@ function generateRound({
   coachingLastDate,
   coachingTodayList,
   coachingLastCoach,
+  fixedCoachees,
   sessionDate
 }) {
   const prevPairsSet = extractPrevPairKeys(previousRound);
@@ -868,15 +875,26 @@ function generateRound({
   const coachList = coachIds || [];
   const coachees = {};
   if (coachList.length > 0 && pool.length > 0) {
-    const picks = pickCoachees(pool, coachList, {
+    // Redrawing a round that is already under way (e.g. doubles toggled
+    // mid-round): whoever is already with a coach stays there, rather than
+    // being re-picked — they've been coached for some minutes already.
+    const fixed = {};
+    coachList.forEach(cid => {
+      const id = fixedCoachees && fixedCoachees[cid];
+      if (id && pool.includes(id)) fixed[cid] = id;
+    });
+    const fixedIds = Object.values(fixed);
+    pool = pool.filter(id => !fixedIds.includes(id));
+    const toPick = coachList.filter(cid => !fixed[cid]);
+    const picks = pickCoachees(pool, toPick, {
       coachingQueues,
       coachingTodayList,
       coachingLastDate,
       coachingCount,
       coachingLastCoach
     });
-    coachList.forEach((cid, i) => {
-      coachees[cid] = picks[i] || null;
+    coachList.forEach(cid => {
+      coachees[cid] = fixed[cid] || picks[toPick.indexOf(cid)] || null;
     });
     pool = pool.filter(id => !picks.includes(id));
   }
@@ -1057,7 +1075,9 @@ function buildBoardSlots(round, coachIds, startTable, endTable, retiredTables) {
       isMartin: false,
       isRetired,
       capacity: isRetired ? 0 : 4,
-      ids: match ? [...match.ids] : []
+      // A doubles table lists team 1's two players first, then team 2's, so
+      // the board can show who is partnered with whom (see SlotBoardCard).
+      ids: match ? match.teams ? [...match.teams[0], ...match.teams[1]] : [...match.ids] : []
     });
   });
   return slots;
@@ -1078,6 +1098,24 @@ function slotsToCoachees(slots) {
   const out = {};
   slots.forEach(s => {
     if (s.isMartin && s.coachId) out[s.coachId] = s.ids.find(id => !isCoachId(id)) || null;
+  });
+  return out;
+}
+// Puts players who left mid-round (after the record threshold) back at the
+// table they were sitting at, for RECORDING purposes only — the live board
+// is untouched. A leaver at a coach table goes right after the coach card, so
+// they are still the one recorded as coached. Anyone who has since been
+// seated somewhere else is left where they are.
+function applyDepartures(slots, departures) {
+  const out = slots.map(s => ({
+    ...s,
+    ids: [...s.ids]
+  }));
+  departures.forEach(d => {
+    if (out.some(s => s.ids.includes(d.id))) return;
+    const slot = out.find(s => s.key === d.slotKey);
+    if (!slot) return;
+    if (slot.isMartin) slot.ids.splice(Math.min(1, slot.ids.length), 0, d.id);else slot.ids.push(d.id);
   });
   return out;
 }
@@ -1135,11 +1173,13 @@ function moveHeldPlayer(slots, heldId, target) {
     ids: [...s.ids]
   }));
   let heldOldSlotKey = null;
+  let heldOldIdx = 0;
   for (const s of next) {
     const idx = s.ids.indexOf(heldId);
     if (idx !== -1) {
       s.ids.splice(idx, 1);
       heldOldSlotKey = s.key;
+      heldOldIdx = idx;
       break;
     }
   }
@@ -1155,7 +1195,9 @@ function moveHeldPlayer(slots, heldId, target) {
         s.ids.splice(idx, 1, heldId);
         if (heldOldSlotKey) {
           const oldSlot = next.find(x => x.key === heldOldSlotKey);
-          if (oldSlot) oldSlot.ids.push(target.playerId);
+          // Into the seat the moved player just left, so a swap keeps both
+          // players on their own side of a doubles table.
+          if (oldSlot) oldSlot.ids.splice(Math.min(heldOldIdx, oldSlot.ids.length), 0, target.playerId);
         }
         break;
       }
@@ -1166,7 +1208,7 @@ function moveHeldPlayer(slots, heldId, target) {
     // consistent across both the board and sidebar.
     if (!targetSlot && heldOldSlotKey) {
       const oldSlot = next.find(x => x.key === heldOldSlotKey);
-      if (oldSlot) oldSlot.ids.push(target.playerId);
+      if (oldSlot) oldSlot.ids.splice(Math.min(heldOldIdx, oldSlot.ids.length), 0, target.playerId);
     }
     return next;
   }
@@ -1178,7 +1220,7 @@ function moveHeldPlayer(slots, heldId, target) {
     } else if (heldOldSlotKey) {
       // Full or missing target — reject the move, put heldId back.
       const oldSlot = next.find(s => s.key === heldOldSlotKey);
-      if (oldSlot) oldSlot.ids.push(heldId);
+      if (oldSlot) oldSlot.ids.splice(Math.min(heldOldIdx, oldSlot.ids.length), 0, heldId);
     }
     return next;
   }
@@ -1306,6 +1348,19 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     }
 
     .ttc-slot-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    /* A doubles table drawn as a table-tennis table: blue top, white edge
+       lines, and a white line across the middle (the net) with one team
+       on each side of it. */
+    .ttc-pingpong {
+      margin-top: 12px; padding: 8px 10px 10px; background: #1f5fbf;
+      border: 3px solid #fff; border-radius: 10px;
+    }
+    .ttc-pp-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .ttc-pp-tag {
+      font-size: 10px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+      color: rgba(255,255,255,0.85); margin: 0 0 4px 2px;
+    }
+    .ttc-pp-net { height: 4px; background: #fff; margin: 10px -10px; }
     button.ttc-player-card {
       background: var(--bg-card); border: 2px solid var(--line); border-radius: 12px;
       padding: 10px 16px; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 17px;
@@ -2076,6 +2131,19 @@ function SlotBoardCard({
       className: "ttc-table-retired-label"
     }, "Not in use — tap to reactivate"));
   }
+  // Exactly four players on an ordinary table = doubles: draw it as a table
+  // with a net between the two teams (first two ids vs last two).
+  const isDoublesTable = !slot.isMartin && slot.ids.length === 4;
+  const playerCard = id => /*#__PURE__*/React.createElement("button", {
+    key: id,
+    type: "button",
+    className: `ttc-player-card ttc-draggable ${heldPlayerId === id ? "held" : ""} ${draggingPlayerId === id ? "ttc-dragging" : ""} ${dragTarget === `card:${id}` ? "ttc-drop-target" : ""}`,
+    "data-drag-player-id": id,
+    onPointerDown: e => onPointerDragStart(e, id),
+    onClick: e => onCardTap(id, e)
+  }, /*#__PURE__*/React.createElement("span", {
+    style: highlightStyleFor(players, id) || undefined
+  }, nameOf(players, id)));
   const tableLabel = slot.isMartin ? /*#__PURE__*/React.createElement("div", {
     className: "ttc-table-num"
   }, `Table ${slot.table}`) : /*#__PURE__*/React.createElement("button", {
@@ -2096,18 +2164,24 @@ function SlotBoardCard({
     }
   }, `${coachNameFor(slot.coachId)}'s table`), chipLabel && /*#__PURE__*/React.createElement("span", {
     className: `ttc-chip ${chipClass}`
-  }, chipLabel), /*#__PURE__*/React.createElement("div", {
+  }, chipLabel), isDoublesTable ? /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pingpong"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pp-tag"
+  }, "Team A"), /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pp-side"
+  }, slot.ids.slice(0, 2).map(id => playerCard(id))), /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pp-net"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pp-side"
+  }, slot.ids.slice(2, 4).map(id => playerCard(id))), /*#__PURE__*/React.createElement("div", {
+    className: "ttc-pp-tag",
+    style: {
+      margin: "4px 0 0 2px"
+    }
+  }, "Team B")) : /*#__PURE__*/React.createElement("div", {
     className: "ttc-slot-cards"
-  }, slot.ids.map(id => /*#__PURE__*/React.createElement("button", {
-    key: id,
-    type: "button",
-    className: `ttc-player-card ttc-draggable ${heldPlayerId === id ? "held" : ""} ${draggingPlayerId === id ? "ttc-dragging" : ""} ${dragTarget === `card:${id}` ? "ttc-drop-target" : ""}`,
-    "data-drag-player-id": id,
-    onPointerDown: e => onPointerDragStart(e, id),
-    onClick: e => onCardTap(id, e)
-  }, /*#__PURE__*/React.createElement("span", {
-    style: highlightStyleFor(players, id) || undefined
-  }, nameOf(players, id)))), Array.from({
+  }, slot.ids.map(id => playerCard(id)), Array.from({
     length: emptyCount
   }).map((_, i) => /*#__PURE__*/React.createElement("button", {
     key: `empty-${i}`,
@@ -2306,9 +2380,13 @@ function CoachingQueueModal({
   presentIds,
   queue,
   trainedToday,
+  coachingNow,
   onChange,
   onClose
 }) {
+  // In-session only: who is here but hasn't been coached yet today (counting
+  // anyone with a coach right now), so it's easy to see who still needs a turn.
+  const notCoachedYet = trainedToday ? players.filter(p => presentIds.has(p.id) && !trainedToday[p.id] && !(coachingNow || []).includes(p.id)).map(p => p.name).sort((a, b) => a.localeCompare(b)) : null;
   const nameFor = id => {
     const p = players.find(pl => pl.id === id);
     return p ? p.name : id;
@@ -2347,7 +2425,14 @@ function CoachingQueueModal({
       fontSize: 13,
       margin: "0 0 18px"
     }
-  }, `Optional. ${coachName} trains these players in order, one per round. Once the list runs out, his trainee is picked automatically, favouring whoever has waited longest.`), /*#__PURE__*/React.createElement("span", {
+  }, `Optional. ${coachName} trains these players in order, one per round. Once the list runs out, his trainee is picked automatically, favouring whoever has waited longest.`), notCoachedYet && /*#__PURE__*/React.createElement("p", {
+    className: "ttc-not-coached",
+    style: {
+      color: notCoachedYet.length ? "var(--orange)" : "var(--ink-dim)",
+      fontSize: 13,
+      margin: "-8px 0 16px"
+    }
+  }, notCoachedYet.length ? `Not coached yet today (${notCoachedYet.length}): ${notCoachedYet.join(", ")}` : "Everyone here has been coached at least once today."), /*#__PURE__*/React.createElement("span", {
     className: "ttc-label"
   }, "Up next (", queue.length, ")"), queue.length === 0 && /*#__PURE__*/React.createElement("p", {
     style: {
@@ -2851,6 +2936,17 @@ function SessionScreen({
   const [roundIdx, setRoundIdx] = useState(0);
   const [phase, setPhase] = useState("playing"); // playing | break | done
   const [secondsLeft, setSecondsLeft] = useState(roundSeconds);
+  // Pause Round: freezes the countdown (and the played-time count below).
+  const [paused, setPaused] = useState(false);
+  // Seconds of real play in the current round (paused time excluded), used
+  // for the "only record a round once it has run RECORD_AFTER_SECONDS" rule.
+  const roundElapsedRef = useRef(0);
+  // Set by "Skip round" so the bell logic can tell a skip from a round that
+  // ran its full length.
+  const skippedRef = useRef(false);
+  // Players who checked out after the record threshold, with the table they
+  // were at — put back at that table when the round is recorded.
+  const departuresRef = useRef([]);
   const [heldPlayerId, setHeldPlayerId] = useState(null);
   // Pointer Events cover mouse, pen, and touch in one interaction path.
   // A short movement threshold preserves the existing tap controls for
@@ -3115,26 +3211,41 @@ function SessionScreen({
 
   // timer tick
   useEffect(() => {
-    if (phase !== "playing") return;
+    if (phase !== "playing" || paused) return;
     if (secondsLeft <= 0) return;
-    const t = setInterval(() => setSecondsLeft(s => s - 1), 1000);
+    const t = setInterval(() => {
+      roundElapsedRef.current += 1;
+      setSecondsLeft(s => s - 1);
+    }, 1000);
     return () => clearInterval(t);
-  }, [phase, secondsLeft]);
+  }, [phase, secondsLeft, paused]);
 
   // bell trigger
   useEffect(() => {
     if (phase === "playing" && secondsLeft === 0) {
       playBell();
-      // Lock in the round that just ended — using its current board state,
-      // which reflects any manual moves made during play — so future
-      // rounds correctly avoid repeating whatever pairings actually
-      // happened.
+      setPaused(false);
+      // Lock in the round that just ended — using its final board, which
+      // reflects every manual move made during play (so a late correction
+      // is what gets recorded), plus anyone who left after the record
+      // threshold, put back at their table. A round that was skipped
+      // before it had really been played isn't recorded at all.
+      const endedEarly = skippedRef.current && roundElapsedRef.current < recordThreshold(roundSeconds);
+      skippedRef.current = false;
       const finishedRound = rounds[roundIdx];
-      const finishedForHistory = roundForHistory(finishedRound, presentIds);
-      recordPairingsForRound(finishedRound.slots, pairingsRef.current);
-      logCoachingForRound(roundIdx, finishedRound.slots);
-      const updatedHistory = applyRoundToHistory(finishedForHistory, history);
-      setHistory(updatedHistory);
+      const recordSlots = applyDepartures(finishedRound.slots, departuresRef.current.filter(d => d.round === roundIdx));
+      departuresRef.current = departuresRef.current.filter(d => d.round !== roundIdx);
+      const finishedForHistory = roundForHistory({
+        ...finishedRound,
+        slots: recordSlots
+      }, presentIds);
+      let updatedHistory = history;
+      if (!endedEarly) {
+        recordPairingsForRound(recordSlots, pairingsRef.current);
+        logCoachingForRound(roundIdx, recordSlots);
+        updatedHistory = applyRoundToHistory(finishedForHistory, history);
+        setHistory(updatedHistory);
+      }
       const isLast = roundIdx >= TOTAL_ROUNDS - 1;
       if (isLast) {
         finalizeSessionOnce(updatedHistory);
@@ -3168,6 +3279,9 @@ function SessionScreen({
   const startNextRound = () => {
     setRoundIdx(i => i + 1);
     setSecondsLeft(roundSeconds);
+    roundElapsedRef.current = 0;
+    skippedRef.current = false;
+    setPaused(false);
     setPhase("playing");
     setHeldPlayerId(null);
     // If this round started via the auto-start countdown reaching 0,
@@ -3178,7 +3292,10 @@ function SessionScreen({
     setBreakCountdown(60);
   };
   const handleSkipRound = () => {
-    if (phase === "playing") setSecondsLeft(0);
+    if (phase === "playing") {
+      skippedRef.current = true;
+      setSecondsLeft(0);
+    }
   };
   // Auto-starts the next round if nobody hits "Start Round" within a
   // minute — organizers occasionally forget with everyone already at the
@@ -3213,10 +3330,14 @@ function SessionScreen({
     // those pairings genuinely happened — fold them in before
     // persisting, not just whatever completed earlier.
     let finalHistory = history;
-    if (phase === "playing" && rounds[roundIdx]) {
-      recordPairingsForRound(rounds[roundIdx].slots, pairingsRef.current);
-      logCoachingForRound(roundIdx, rounds[roundIdx].slots);
-      finalHistory = applyRoundToHistory(roundForHistory(rounds[roundIdx], presentIds), history);
+    if (phase === "playing" && rounds[roundIdx] && roundElapsedRef.current >= recordThreshold(roundSeconds)) {
+      const recordSlots = applyDepartures(rounds[roundIdx].slots, departuresRef.current.filter(d => d.round === roundIdx));
+      recordPairingsForRound(recordSlots, pairingsRef.current);
+      logCoachingForRound(roundIdx, recordSlots);
+      finalHistory = applyRoundToHistory(roundForHistory({
+        ...rounds[roundIdx],
+        slots: recordSlots
+      }, presentIds), history);
     }
     finalizeSessionOnce(finalHistory);
   };
@@ -3283,6 +3404,7 @@ function SessionScreen({
     const nextRetiredTables = overrides.retiredTables !== undefined ? overrides.retiredTables : retiredTables;
     const redrawnRound = generateRound({
       presentPlayers: nextPresentPlayers,
+      fixedCoachees: rounds[roundIdx] ? slotsToCoachees(rounds[roundIdx].slots) : {},
       coachIds,
       isDoubles: nextIsDoubles,
       startTable,
@@ -3574,9 +3696,16 @@ function SessionScreen({
     title: "Tap to change the round length",
     style: {
       cursor: "pointer",
-      color: secondsLeft <= 30 ? "var(--danger)" : secondsLeft <= 120 ? "var(--orange)" : "var(--ink-dim)"
+      color: paused ? "var(--orange)" : secondsLeft <= 30 ? "var(--danger)" : secondsLeft <= 120 ? "var(--orange)" : "var(--ink-dim)"
     }
-  }, Math.floor(secondsLeft / 60), ":", (secondsLeft % 60).toString().padStart(2, "0"))), /*#__PURE__*/React.createElement("div", {
+  }, Math.floor(secondsLeft / 60), ":", (secondsLeft % 60).toString().padStart(2, "0"), paused && /*#__PURE__*/React.createElement("span", {
+    className: "ttc-paused-tag",
+    style: {
+      marginLeft: 10,
+      fontSize: 14,
+      letterSpacing: "0.12em"
+    }
+  }, "\u23F8 PAUSED"))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -3612,6 +3741,10 @@ function SessionScreen({
       padding: "8px 14px"
     }
   }, `${coachNameFor(cid)}'s list${(coachingQueues[cid] || []).length > 0 ? ` (${coachingQueues[cid].length})` : ""}`)), phase === "playing" && /*#__PURE__*/React.createElement("button", {
+    className: `ttc-btn ${paused ? "ttc-btn-primary" : ""}`,
+    onClick: () => setPaused(p => !p),
+    title: paused ? "Carry on with the countdown" : "Freeze the countdown (e.g. while you re-arrange tables)"
+  }, paused ? "Resume round" : "Pause round"), phase === "playing" && /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
     onClick: handleSkipRound,
     title: "Ends the current round right now and shows the next round's draw"
@@ -3748,7 +3881,17 @@ function SessionScreen({
       } else {
         // Round already in progress — just remove their card and leave
         // the rest of that table as-is; the physical game underway
-        // shouldn't get reshuffled around them.
+        // shouldn't get reshuffled around them. If they've been playing
+        // long enough for the round to count, remember their seat so the
+        // record still shows who they played with / who coached them.
+        if (roundElapsedRef.current >= recordThreshold(roundSeconds)) {
+          const seat = rounds[currentRoundIdx] && rounds[currentRoundIdx].slots.find(sl => sl.ids.includes(checkedOutId));
+          if (seat) departuresRef.current.push({
+            round: currentRoundIdx,
+            id: checkedOutId,
+            slotKey: seat.key
+          });
+        }
         setRounds(prev => {
           const next = [...prev];
           if (!next[currentRoundIdx]) return prev;
@@ -3780,6 +3923,7 @@ function SessionScreen({
     presentIds: presentIds,
     queue: coachingQueues[queueModalCoach] || [],
     trainedToday: history.coachingTodayList,
+    coachingNow: Object.values(slotsToCoachees(currentRound.slots)).filter(Boolean),
     onChange: q => setCoachingQueues(prev => ({
       ...prev,
       [queueModalCoach]: q
