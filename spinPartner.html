@@ -1135,29 +1135,56 @@ function roundForHistory(round, presentIds) {
 }
 
 /**
- * Records, for a session-long report, who shared a table with whom this
- * round — every pairwise combination at each table, including Martin
- * (shown as "Martin" rather than his internal pseudo-id). This is
- * deliberately separate from pairHistory: that system exists purely for
- * grade-matching/repeat-avoidance and excludes Martin on purpose, since
- * he isn't subject to those rules — this report is just an honest record
- * of who actually played with whom, coach included. Mutates `pairings`
- * in place: { playerName: Set of names they shared a table with }.
+ * Records, for the session's "Pairings" report, who shared a table with whom
+ * this round \u2014 every pairwise combination of PLAYERS at each table. Coaches
+ * are deliberately left out: who they coached is in the Coaching History tab.
+ * This is separate from pairHistory, which exists only for grade-matching /
+ * repeat-avoidance.
+ *
+ * Each pairing is counted once per round and kept apart by kind: "s" for an
+ * ordinary table, "d" for a doubles table (an ordinary table with exactly four
+ * seats filled, counting a coach who has joined in for a friendly game \u2014 the
+ * same rule the board uses to draw the table-tennis table). Mutates
+ * `pairings` in place: { name: { partnerName: { s: n, d: n } } }.
  */
 function recordPairingsForRound(slots, pairings) {
   slots.forEach(slot => {
-    const names = slot.ids.map(id => isCoachId(id) ? coachNameFor(id) : id);
+    const kind = !slot.isMartin && slot.ids.length === 4 ? "d" : "s";
+    const names = slot.ids.filter(id => !isCoachId(id));
+    const bump = (a, b) => {
+      if (!pairings[a]) pairings[a] = {};
+      if (!pairings[a][b]) pairings[a][b] = {
+        s: 0,
+        d: 0
+      };
+      pairings[a][b][kind] += 1;
+    };
     for (let i = 0; i < names.length; i++) {
       for (let j = i + 1; j < names.length; j++) {
-        const a = names[i];
-        const b = names[j];
-        if (!pairings[a]) pairings[a] = new Set();
-        if (!pairings[b]) pairings[b] = new Set();
-        pairings[a].add(b);
-        pairings[b].add(a);
+        bump(names[i], names[j]);
+        bump(names[j], names[i]);
       }
     }
   });
+}
+
+/**
+ * Turns one player's recorded pairings into the list written to the sheet:
+ * alphabetical, a plain name for ordinary tables and "Name(D)" for doubles,
+ * with " (n)" added when it happened more than once. A partner met both ways
+ * appears twice, plain first: ["Mohand", "Mohand(D)", "Peter B (2)"].
+ */
+function formatPartnerList(partnerMap) {
+  const out = [];
+  Object.keys(partnerMap || {}).sort((a, b) => a.localeCompare(b)).forEach(name => {
+    const {
+      s,
+      d
+    } = partnerMap[name];
+    if (s > 0) out.push(s > 1 ? `${name} (${s})` : name);
+    if (d > 0) out.push(d > 1 ? `${name}(D) (${d})` : `${name}(D)`);
+  });
+  return out;
 }
 
 /**
@@ -3158,11 +3185,13 @@ function SessionScreen({
     // Keith (when coaching) never enters presentIds, so add him explicitly:
     // he's present all session and, as a key holder, still counts for fees.
     const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id) || keithP && p.id === keithP.id);
+    // One row per player. Coaches get no row and are never listed as
+    // someone's partner (see recordPairingsForRound); Keith only gets a row
+    // when he's playing rather than coaching.
     const pairingNames = attendedPlayers.filter(p => !keithP || p.id !== keithP.id).map(p => p.name);
-    coachIdsFor(config.coachChoice).forEach(cid => pairingNames.push(coachNameFor(cid)));
     const pairings = pairingNames.map(name => ({
       name,
-      partners: pairingsRef.current[name] ? [...pairingsRef.current[name]].sort() : []
+      partners: formatPartnerList(pairingsRef.current[name])
     }));
     // Build coaching history: one entry per round where someone was coached
     const coachingData = [...coachingLogRef.current];
