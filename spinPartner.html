@@ -371,7 +371,7 @@ const ROSTER_CACHE_KEY = "ttc:rosterCache";
 // holder as a full-fee payer: the fetch failed, it fell back to a cache from
 // before keyStatus existed, and every player's missing keyStatus quietly
 // defaulted to "None".
-const ROSTER_CACHE_VERSION = 2;
+const ROSTER_CACHE_VERSION = 3;
 const TABLE_CONFIG_KEY = "ttc:tableConfig";
 const FAIRNESS_KEY = "ttc:fairnessHistory";
 // Last coaching-history rows fetched from the Sheet, kept so coaching
@@ -439,7 +439,7 @@ async function fetchRosterFromSheet() {
     // trade-off for how rarely that happens.
     id: p.name,
     name: p.name,
-    grade: p.grade === 2 ? 2 : 1,
+    grade: [1, 2, 3].includes(Number(p.grade)) ? Number(p.grade) : 1,
     category: p.category === "junior" || p.category === "retired" ? p.category : "senior",
     keyStatus: p.keyStatus === "Own" || p.keyStatus === "Shared" ? p.keyStatus : "None",
     // Optional per-player name highlight (e.g. for players who have
@@ -605,8 +605,8 @@ const pairScore = (pairHistory, pairLastRound, a, b) => {
 //      a same-grade table that would force one.
 const combinedPairScore = (pairHistory, pairLastRound, gradeMap, a, b) => {
   const base = pairScore(pairHistory, pairLastRound, a, b);
-  const mixedGrade = gradeMap && gradeMap[a] !== gradeMap[b] ? 1 : 0;
-  return base * 10000 + mixedGrade;
+  const gradeGap = gradeMap ? Math.abs(gradeMap[a] - gradeMap[b]) : 0;
+  return base * 10000 + gradeGap;
 };
 function matchGradeLabel(ids, gradeMap) {
   const grades = new Set(ids.map(id => gradeMap[id]));
@@ -1363,6 +1363,8 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
       --grade1-dim: #16352b;
       --grade2: #5b9ee0;
       --grade2-dim: #182c40;
+      --grade3: #e0a23e;
+      --grade3-dim: #3a2c12;
       --danger: #ef5b5b;
       --table-active: #f5d90a;
       --table-retired: #3d3606;
@@ -1422,6 +1424,7 @@ const GlobalStyle = () => /*#__PURE__*/React.createElement("style", null, `
     }
     .ttc-chip-g1 { background: var(--grade1-dim); color: var(--grade1); }
     .ttc-chip-g2 { background: var(--grade2-dim); color: var(--grade2); }
+    .ttc-chip-g3 { background: var(--grade3-dim); color: var(--grade3); }
     .ttc-chip-mixed { background: var(--bg-card); color: var(--ink-dim); border: 1px solid var(--line); }
     .ttc-chip-resting { background: var(--bg-card); color: var(--ink-dim); }
 
@@ -2234,7 +2237,7 @@ function SlotBoardCard({
     const grades = new Set(gradeIds.map(id => playersById[id]?.grade));
     grade = grades.size === 1 ? [...grades][0] : "mixed";
   }
-  const chipClass = grade === 1 ? "ttc-chip-g1" : grade === 2 ? "ttc-chip-g2" : "ttc-chip-mixed";
+  const chipClass = grade === 1 ? "ttc-chip-g1" : grade === 2 ? "ttc-chip-g2" : grade === 3 ? "ttc-chip-g3" : "ttc-chip-mixed";
   const chipLabel = grade === "mixed" ? "Mixed" : grade ? `Grade ${grade}` : null;
   const emptyCount = Math.max(0, slot.capacity - slot.ids.length);
   // Martin's table can't be retired (doesn't map to a real, usable peer
