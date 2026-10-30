@@ -496,6 +496,21 @@ const MARTIN_ID = "__martin__";
 const KEITH_ID = "__keith__";
 const isCoachId = id => id === MARTIN_ID || id === KEITH_ID;
 const coachNameFor = id => id === KEITH_ID ? "Keith" : "Martin";
+// Which table each coach sits at is tracked per session as { coachId: table }.
+// Setup's choice gives the starting line-up: both coaches take the first two
+// tables, Martin first; either one on his own takes the first table. A coach
+// who arrives later takes whichever of those two tables is free (so nobody
+// has to move), and a coach who leaves frees theirs.
+const defaultCoachTables = (choice, startTable) => choice === "both" ? {
+  [MARTIN_ID]: startTable,
+  [KEITH_ID]: startTable + 1
+} : choice === "martin" ? {
+  [MARTIN_ID]: startTable
+} : choice === "keith" ? {
+  [KEITH_ID]: startTable
+} : {};
+const orderedCoachIds = tables => Object.keys(tables).sort((a, b) => tables[a] - tables[b]);
+const nextFreeCoachTable = (tables, startTable) => [startTable, startTable + 1].find(t => !Object.values(tables).includes(t));
 // Setup's coachChoice ("martin" | "keith" | "both" | "neither") -> the coach
 // pseudo-ids on the board, in table order (first one gets the first table).
 const coachIdsFor = choice => choice === "both" ? [MARTIN_ID, KEITH_ID] : choice === "martin" ? [MARTIN_ID] : choice === "keith" ? [KEITH_ID] : [];
@@ -763,13 +778,18 @@ function splitTeams(quad, pairHistory, pairLastRound, prevPairsSet) {
 // be brought into rotation later if needed. Used consistently by round
 // generation, the board, and both the Setup and in-session table lists,
 // so none of them can drift out of sync with each other.
-function peerTableNumbers(startTable, endTable, coachTables) {
-  // coachTables: how many tables (0, 1 or 2) are taken by coaches, counting
-  // up from startTable. A plain boolean still works (true = 1 table).
-  const skip = typeof coachTables === "number" ? coachTables : coachTables ? 1 : 0;
+function peerTableNumbers(startTable, endTable, coaches) {
+  // coaches: { coachId: tableNumber } for the coaches in play — those tables
+  // aren't ordinary tables. A plain number (that many tables from startTable)
+  // or boolean (one table) still works for older callers.
+  const taken = new Set();
+  if (coaches && typeof coaches === "object") Object.values(coaches).forEach(t => taken.add(t));else {
+    const skip = typeof coaches === "number" ? coaches : coaches ? 1 : 0;
+    for (let i = 0; i < skip; i++) taken.add(startTable + i);
+  }
   const numbers = [];
   for (let t = 1; t <= endTable; t++) {
-    if (t >= startTable && t < startTable + skip) continue;
+    if (taken.has(t)) continue;
     numbers.push(t);
   }
   return numbers;
@@ -850,7 +870,7 @@ function pickCoachees(pool, coachIds, {
 }
 function generateRound({
   presentPlayers,
-  coachIds,
+  coachTables,
   isDoubles,
   startTable,
   endTable,
@@ -872,7 +892,7 @@ function generateRound({
   const prevPairsSet = extractPrevPairKeys(previousRound);
   let pool = presentPlayers.map(p => p.id);
   // One trainee per coach on the board ({} when nobody's coaching).
-  const coachList = coachIds || [];
+  const coachList = orderedCoachIds(coachTables || {});
   const coachees = {};
   if (coachList.length > 0 && pool.length > 0) {
     // Redrawing a round that is already under way (e.g. doubles toggled
@@ -945,7 +965,7 @@ function generateRound({
   }
   const orderedMatches = shuffled(matches);
   const peerTables = [];
-  peerTableNumbers(startTable, endTable, coachList.length).forEach(t => {
+  peerTableNumbers(startTable, endTable, coachTables || {}).forEach(t => {
     if (!retiredTables || !retiredTables.has(t)) peerTables.push(t);
   });
   orderedMatches.forEach((m, idx) => {
@@ -1051,22 +1071,23 @@ const emptyHistory = () => ({
    demand rather than stored redundantly, so they can never drift out of
    sync with what's actually on the board.
    ============================================================ */
-function buildBoardSlots(round, coachIds, startTable, endTable, retiredTables) {
+function buildBoardSlots(round, coachTables, startTable, endTable, retiredTables) {
   const slots = [];
-  // One table per coach, side by side from startTable. (isMartin is the
-  // historical name for "is a coach table" — true for Keith's table too.)
-  coachIds.forEach((cid, i) => {
+  // One table per coach, at the table they were given this session.
+  // (isMartin is the historical name for "is a coach table" — true for
+  // Keith's table too.)
+  orderedCoachIds(coachTables).forEach(cid => {
     const trainee = round.coachees && round.coachees[cid];
     slots.push({
       key: cid === KEITH_ID ? "keith" : "martin",
-      table: startTable + i,
+      table: coachTables[cid],
       isMartin: true,
       coachId: cid,
       capacity: 4,
       ids: trainee ? [cid, trainee] : [cid]
     });
   });
-  peerTableNumbers(startTable, endTable, coachIds.length).forEach(t => {
+  peerTableNumbers(startTable, endTable, coachTables).forEach(t => {
     const match = round.matches.find(m => m.table === t);
     const isRetired = !!(retiredTables && retiredTables.has(t));
     slots.push({
@@ -1101,8 +1122,8 @@ function slotsToCoachees(slots) {
   });
   return out;
 }
-// Puts players who left mid-round (after the record threshold) back at the
-// table they were sitting at, for RECORDING purposes only — the live board
+// Puts players (and coaches) who left mid-round (after the record threshold)
+// back where they were, for RECORDING purposes only — the live board
 // is untouched. A leaver at a coach table goes right after the coach card, so
 // they are still the one recorded as coached. Anyone who has since been
 // seated somewhere else is left where they are.
@@ -1112,12 +1133,81 @@ function applyDepartures(slots, departures) {
     ids: [...s.ids]
   }));
   departures.forEach(d => {
+    if (d.coachId) {
+      // A coach who left mid-round (after the threshold): the trainee still
+      // counts as coached by them, even though their table is now ordinary.
+      if (out.some(s => s.coachId === d.coachId)) return;
+      out.push({
+        key: d.coachId === KEITH_ID ? "keith" : "martin",
+        table: d.table,
+        isMartin: true,
+        coachId: d.coachId,
+        capacity: 4,
+        ids: [d.coachId, d.trainee]
+      });
+      return;
+    }
     if (out.some(s => s.ids.includes(d.id))) return;
     const slot = out.find(s => s.key === d.slotKey);
     if (!slot) return;
     if (slot.isMartin) slot.ids.splice(Math.min(1, slot.ids.length), 0, d.id);else slot.ids.push(d.id);
   });
   return out;
+}
+// Mid-round: a coach has just arrived and takes their fixed table. Whoever is
+// sitting at that table is returned as `displaced` (the caller re-seats them),
+// and, if the coach is Keith and he had been on the board as a regular player,
+// he is taken off it. Pure — returns new slots, coach tables first.
+function addCoachTableToSlots(slots, cid, table, keithPlayerId) {
+  const next = slots.map(s => ({
+    ...s,
+    ids: [...s.ids]
+  }));
+  if (keithPlayerId) next.forEach(s => {
+    s.ids = s.ids.filter(id => id !== keithPlayerId);
+  });
+  const idx = next.findIndex(s => s.table === table && !s.isMartin);
+  const displaced = idx >= 0 ? next[idx].ids.filter(id => id !== keithPlayerId) : [];
+  if (idx >= 0) next.splice(idx, 1);
+  const coachSlot = {
+    key: cid === KEITH_ID ? "keith" : "martin",
+    table,
+    isMartin: true,
+    coachId: cid,
+    capacity: 4,
+    ids: [cid]
+  };
+  const coachSlots = [...next.filter(s => s.isMartin), coachSlot].sort((a, b) => a.table - b.table);
+  return {
+    slots: [...coachSlots, ...next.filter(s => !s.isMartin)],
+    displaced
+  };
+}
+// A coach has left. Their card comes off the board and their table becomes an
+// ordinary one. A lone player who was with them is NOT left stranded at an
+// empty table: they go to the side (off the board), and the caller's
+// auto-seating pairs them with someone waiting if it can. Two or more players
+// at the table are already a game, so they stay. Pure — returns new slots,
+// coach tables first, ordinary tables in table order.
+function removeCoachTableFromSlots(slots, cid) {
+  const next = slots.map(s => ({
+    ...s,
+    ids: s.ids.filter(id => id !== cid)
+  }));
+  const idx = next.findIndex(s => s.coachId === cid);
+  if (idx >= 0) {
+    const ids = next[idx].ids;
+    const stay = ids.filter(id => !isCoachId(id)).length >= 2;
+    next[idx] = {
+      key: `table-${next[idx].table}`,
+      table: next[idx].table,
+      isMartin: false,
+      isRetired: false,
+      capacity: 4,
+      ids: stay ? ids : ids.filter(isCoachId)
+    };
+  }
+  return [...next.filter(s => s.isMartin), ...next.filter(s => !s.isMartin).sort((a, b) => a.table - b.table)];
 }
 function slotsToResting(slots, presentIds) {
   const onBoard = new Set();
@@ -1730,7 +1820,6 @@ function SetupScreen({
   });
   // Which coach's list is open in the picker (null = closed).
   const [queueModalCoach, setQueueModalCoach] = useState(null);
-  const coachTableCount = coachIdsFor(coachChoice).length;
   const keithCoachPlayer = keithIsCoaching(coachChoice) ? findKeithPlayer(players) : null;
   const selectablePlayers = keithCoachPlayer ? players.filter(p => p.id !== keithCoachPlayer.id) : players;
   // Picking a coach. If Keith is one of them he comes out of the player
@@ -1792,6 +1881,7 @@ function SetupScreen({
     tableCount
   } = tableConfig;
   const endTable = startTable + tableCount - 1;
+  const setupCoachTables = defaultCoachTables(coachChoice, startTable);
   // Tables marked "not in use" before the session even starts — e.g. a
   // table too close to a wall, decided while doing headcount, before
   // there's any round or board to click on yet. Carried into the
@@ -1876,7 +1966,7 @@ function SetupScreen({
       marginTop: 14,
       marginBottom: 0
     }
-  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", coachTableCount === 2 ? " — Martin and Keith take the first two" : coachTableCount === 1 ? ` — ${coachChoice === "martin" ? "Martin" : "Keith"} takes the first one` : ""), /*#__PURE__*/React.createElement("p", {
+  }, "Tables ", startTable, "–", endTable, " today (", tableCount, " table", tableCount === 1 ? "" : "s", ")", coachChoice === "both" ? " — Martin and Keith take the first two" : coachChoice === "martin" ? " — Martin takes the first one" : coachChoice === "keith" ? " — Keith takes the first one" : ""), /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 12,
@@ -1890,7 +1980,7 @@ function SetupScreen({
       gap: 8,
       marginBottom: 4
     }
-  }, peerTableNumbers(startTable, endTable, coachTableCount).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+  }, peerTableNumbers(startTable, endTable, setupCoachTables).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
     key: t,
     tableNum: t,
     isRetired: retiredTables.has(t),
@@ -1914,7 +2004,13 @@ function SetupScreen({
   }, "Both"), /*#__PURE__*/React.createElement("button", {
     className: `ttc-toggle ${coachChoice === "neither" ? "active" : ""}`,
     onClick: () => chooseCoach("neither")
-  }, "Neither")), keithIsCoaching(coachChoice) && (keithCoachPlayer || !rosterLoading && players.length > 0) && /*#__PURE__*/React.createElement("p", {
+  }, "Neither")), coachChoice !== "both" && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "var(--ink-dim)",
+      fontSize: 12,
+      margin: "10px 0 0"
+    }
+  }, "A coach arriving late, or leaving early? You can add or remove them from the session screen."), keithIsCoaching(coachChoice) && (keithCoachPlayer || !rosterLoading && players.length > 0) && /*#__PURE__*/React.createElement("p", {
     style: {
       color: "var(--ink-dim)",
       fontSize: 12,
@@ -2008,7 +2104,7 @@ function SetupScreen({
     onClick: () => onStart({
       startTable,
       // Never fewer tables than coaches — each coach needs their own.
-      tableCount: Math.max(tableCount, coachTableCount),
+      tableCount: Math.max(tableCount, Object.keys(setupCoachTables).length),
       coachChoice,
       coachingQueues: {
         [MARTIN_ID]: [...(coachingQueues[MARTIN_ID] || [])],
@@ -2233,6 +2329,7 @@ function ConfirmModal({
   title,
   body,
   confirmLabel,
+  confirmClassName,
   onConfirm,
   onClose
 }) {
@@ -2265,7 +2362,7 @@ function ConfirmModal({
       gap: 10
     }
   }, /*#__PURE__*/React.createElement("button", {
-    className: "ttc-btn ttc-btn-danger",
+    className: confirmClassName || "ttc-btn ttc-btn-danger",
     onClick: onConfirm
   }, confirmLabel), /*#__PURE__*/React.createElement("button", {
     className: "ttc-btn",
@@ -2593,7 +2690,7 @@ function SessionRosterPanel({
   rosterError,
   usingCache,
   onRefreshRoster,
-  coachTableCount,
+  coachTables,
   startTable,
   endTable,
   retiredTables,
@@ -2764,7 +2861,7 @@ function SessionRosterPanel({
       flexWrap: "wrap",
       gap: 8
     }
-  }, peerTableNumbers(startTable, endTable, coachTableCount).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
+  }, peerTableNumbers(startTable, endTable, coachTables).map(t => /*#__PURE__*/React.createElement(TableToggleChip, {
     key: t,
     tableNum: t,
     isRetired: retiredTables.has(t),
@@ -2921,8 +3018,19 @@ function SessionScreen({
   onEnd
 }) {
   // The coach pseudo-ids on the board this session, in table order.
-  const coachIds = useMemo(() => coachIdsFor(config.coachChoice), [config.coachChoice]);
-  const keithPlayer = keithIsCoaching(config.coachChoice) ? findKeithPlayer(players) : null;
+  // Where each coach is sitting right now, as { coachId: table }. Starts as
+  // Setup's choice; a coach who arrives late is added, and one who has to
+  // leave early is removed, from the toolbar during the session.
+  const [coachTables, setCoachTables] = useState(() => defaultCoachTables(config.coachChoice, config.startTable || 1));
+  const coachIds = useMemo(() => orderedCoachIds(coachTables), [coachTables]);
+  // Everyone who has coached at ANY point this session. Billing (Martin's
+  // fee) and attendance (Keith's key) go by this, not by who is still here,
+  // and Keith stays out of the player pool even after he has left.
+  const [everCoaches, setEverCoaches] = useState(() => Object.keys(defaultCoachTables(config.coachChoice, 1)));
+  const everChoice = everCoaches.includes(MARTIN_ID) && everCoaches.includes(KEITH_ID) ? "both" : everCoaches.includes(MARTIN_ID) ? "martin" : everCoaches.includes(KEITH_ID) ? "keith" : "neither";
+  const keithPlayer = everCoaches.includes(KEITH_ID) ? findKeithPlayer(players) : null;
+  const [addingCoach, setAddingCoach] = useState(null);
+  const [leavingCoach, setLeavingCoach] = useState(null);
   const rosterPlayers = keithPlayer ? players.filter(p => p.id !== keithPlayer.id) : players;
   // Round length used to be a fixed const derived from setup config; now
   // it's state so it can be edited mid-session (tapping the countdown).
@@ -3114,12 +3222,13 @@ function SessionScreen({
   // can never silently strand players who are currently seated there;
   // retire that table instead if it's occupied.
   const handleRemoveTable = () => {
-    if (sessionTableCount <= Math.max(1, coachIds.length)) return;
+    const coachSpan = coachIds.length ? Math.max(...Object.values(coachTables)) - startTable + 1 : 0;
+    if (sessionTableCount <= Math.max(1, coachSpan)) return;
     const removingTableNum = endTable;
     const round = rounds[currentRoundIdx];
     const targetSlot = round && round.slots.find(s => s.table === removingTableNum);
     if (targetSlot && targetSlot.ids.length > 0) return;
-    setSessionTableCount(c => Math.max(1, coachIds.length, c - 1));
+    setSessionTableCount(c => Math.max(1, coachSpan, c - 1));
     setRounds(prev => {
       const idx = currentRoundIdx;
       const r = prev[idx];
@@ -3181,21 +3290,21 @@ function SessionScreen({
   const finalizeSessionOnce = useCallback(finalHistory => {
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
-    const keithP = keithIsCoaching(config.coachChoice) ? findKeithPlayer(players) : null;
+    const keithP = everCoaches.includes(KEITH_ID) ? findKeithPlayer(players) : null;
     // Keith (when coaching) never enters presentIds, so add him explicitly:
     // he's present all session and, as a key holder, still counts for fees.
     const attendedPlayers = players.filter(p => everPresentIdsRef.current.has(p.id) || keithP && p.id === keithP.id);
     // One row per player. Coaches get no row and are never listed as
     // someone's partner (see recordPairingsForRound); Keith only gets a row
     // when he's playing rather than coaching.
-    const pairingNames = attendedPlayers.filter(p => !keithP || p.id !== keithP.id).map(p => p.name);
+    const pairingNames = attendedPlayers.filter(p => !keithP || p.id !== keithP.id || pairingsRef.current[p.name]).map(p => p.name);
     const pairings = pairingNames.map(name => ({
       name,
       partners: formatPartnerList(pairingsRef.current[name])
     }));
     // Build coaching history: one entry per round where someone was coached
     const coachingData = [...coachingLogRef.current];
-    sendAttendance(attendedPlayers, config.coachChoice, pairings, coachingData);
+    sendAttendance(attendedPlayers, everChoice, pairings, coachingData);
     if (onPersistFairness) onPersistFairness(finalHistory.martinTrainedCount, finalHistory.restCount, finalHistory.coachingCount, finalHistory.coachingLastDate, finalHistory.coachingLastCoach);
     setSessionSummary({
       date: todayDateString(),
@@ -3205,7 +3314,7 @@ function SessionScreen({
         highlightColor: p.highlightColor
       }))
     });
-  }, [players, onPersistFairness, config.coachChoice]);
+  }, [players, onPersistFairness, everChoice]);
 
   // init round 1
   useEffect(() => {
@@ -3213,7 +3322,7 @@ function SessionScreen({
     initedRef.current = true;
     const r0 = generateRound({
       presentPlayers,
-      coachIds,
+      coachTables,
       isDoubles: false,
       startTable,
       endTable,
@@ -3228,7 +3337,7 @@ function SessionScreen({
     });
     setRounds([{
       index: 0,
-      slots: buildBoardSlots(r0, coachIds, startTable, endTable, retiredTables)
+      slots: buildBoardSlots(r0, coachTables, startTable, endTable, retiredTables)
     }]);
     try {
       if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(() => {});
@@ -3283,7 +3392,7 @@ function SessionScreen({
       }
       const nextRound = generateRound({
         presentPlayers,
-        coachIds,
+        coachTables,
         isDoubles: isDoublesMode,
         startTable,
         endTable,
@@ -3299,7 +3408,7 @@ function SessionScreen({
       });
       setRounds(prev => [...prev, {
         index: roundIdx + 1,
-        slots: buildBoardSlots(nextRound, coachIds, startTable, endTable, retiredTables)
+        slots: buildBoardSlots(nextRound, coachTables, startTable, endTable, retiredTables)
       }]);
       setPhase("break");
     }
@@ -3393,12 +3502,14 @@ function SessionScreen({
     const nextPresentPlayers = overrides.presentPlayers || presentPlayers;
     const nextIsDoubles = overrides.isDoubles !== undefined ? overrides.isDoubles : isDoublesMode;
     const nextRetiredTables = overrides.retiredTables !== undefined ? overrides.retiredTables : retiredTables;
+    const nextCoachTables = overrides.coachTables || coachTables;
+    const nextEndTable = overrides.endTable !== undefined ? overrides.endTable : endTable;
     const nextRound = generateRound({
       presentPlayers: nextPresentPlayers,
-      coachIds,
+      coachTables: nextCoachTables,
       isDoubles: nextIsDoubles,
       startTable,
-      endTable,
+      endTable: nextEndTable,
       roundIndex: roundIdx + 1,
       previousRound,
       retiredTables: nextRetiredTables,
@@ -3413,7 +3524,7 @@ function SessionScreen({
       const next = [...prev];
       next[roundIdx + 1] = {
         index: roundIdx + 1,
-        slots: buildBoardSlots(nextRound, coachIds, startTable, endTable, nextRetiredTables)
+        slots: buildBoardSlots(nextRound, nextCoachTables, startTable, nextEndTable, nextRetiredTables)
       };
       return next;
     });
@@ -3434,7 +3545,7 @@ function SessionScreen({
     const redrawnRound = generateRound({
       presentPlayers: nextPresentPlayers,
       fixedCoachees: rounds[roundIdx] ? slotsToCoachees(rounds[roundIdx].slots) : {},
-      coachIds,
+      coachTables,
       isDoubles: nextIsDoubles,
       startTable,
       endTable,
@@ -3452,7 +3563,7 @@ function SessionScreen({
       const next = [...prev];
       next[roundIdx] = {
         index: roundIdx,
-        slots: buildBoardSlots(redrawnRound, coachIds, startTable, endTable, nextRetiredTables)
+        slots: buildBoardSlots(redrawnRound, coachTables, startTable, endTable, nextRetiredTables)
       };
       return next;
     });
@@ -3539,6 +3650,102 @@ function SessionScreen({
       };
       return next;
     });
+  };
+  // A coach arrives after the session has started. They take whichever of
+  // the two coach tables is free (the first table if nobody is coaching yet,
+  // otherwise the other one), so nobody already coaching has to move:
+  //  - between rounds (break screen): the upcoming draw is simply redone with
+  //    them included, so they get a trainee straight away;
+  //  - mid-round: that table is converted on the spot. Whoever was playing
+  //    there is re-seated at a free table (or waits at the side) — the same
+  //    way retiring a table does it — and they take a trainee from the next
+  //    draw, or the organizer can drag someone onto the table right away.
+  // If Keith was checked in as an ordinary player he leaves the player list
+  // (he's still recorded as attending, so his key still counts for fees).
+  const handleAddCoach = cid => {
+    const coachTable = nextFreeCoachTable(coachTables, startTable);
+    const nextTables = {
+      ...coachTables,
+      [cid]: coachTable
+    };
+    const keithP = cid === KEITH_ID ? findKeithPlayer(players) : null;
+    const nextPresentPlayers = keithP ? presentPlayers.filter(p => p.id !== keithP.id) : presentPlayers;
+    if (keithP && presentIds.has(keithP.id)) onTogglePresent(keithP.id);
+    // The coach table has to exist, and a coach's table is never "retired".
+    const nextEndTable = Math.max(endTable, coachTable);
+    if (nextEndTable > endTable) setSessionTableCount(nextEndTable - startTable + 1);
+    const nextRetired = new Set(retiredTables);
+    nextRetired.delete(coachTable);
+    setRetiredTables(nextRetired);
+    setCoachTables(nextTables);
+    setEverCoaches(prev => prev.includes(cid) ? prev : [...prev, cid]);
+    if (keithP) setCoachingQueues(qs => Object.fromEntries(Object.entries(qs).map(([k, list]) => [k, list.filter(id => id !== keithP.id)])));
+    setAddingCoach(null);
+    if (phase === "break") {
+      regenerateUpcomingRound({
+        presentPlayers: nextPresentPlayers,
+        coachTables: nextTables,
+        endTable: nextEndTable,
+        retiredTables: nextRetired
+      });
+    } else {
+      setRounds(prev => {
+        const round = prev[roundIdx];
+        if (!round) return prev;
+        const {
+          slots
+        } = addCoachTableToSlots(round.slots, cid, coachTable, keithP && keithP.id);
+        const next = [...prev];
+        next[roundIdx] = {
+          ...round,
+          slots
+        };
+        return next;
+      });
+      // Re-seat anyone displaced from that table (and anyone already waiting).
+      autoFillEmptyTables(nextPresentPlayers);
+    }
+  };
+  // A coach has to leave early. Their table goes back to being an ordinary one:
+  //  - between rounds: the upcoming draw is redone without them;
+  //  - mid-round: their card comes off and their trainee moves to the side
+  //    (paired with someone waiting if possible, never left alone at an empty
+  //    table). If the round has run long enough to count (see
+  //    RECORD_AFTER_SECONDS) that trainee is still recorded as coached by them.
+  // They still count as having coached today (billing / attendance).
+  const handleCoachLeaves = cid => {
+    const table = coachTables[cid];
+    const nextTables = {
+      ...coachTables
+    };
+    delete nextTables[cid];
+    setCoachTables(nextTables);
+    setLeavingCoach(null);
+    if (phase === "break") {
+      regenerateUpcomingRound({
+        coachTables: nextTables
+      });
+      return;
+    }
+    const slot = rounds[roundIdx] && rounds[roundIdx].slots.find(s => s.coachId === cid);
+    const trainee = slot && slot.ids.find(id => !isCoachId(id));
+    if (trainee && roundElapsedRef.current >= recordThreshold(roundSeconds)) departuresRef.current.push({
+      round: roundIdx,
+      coachId: cid,
+      trainee,
+      table
+    });
+    setRounds(prev => {
+      const round = prev[roundIdx];
+      if (!round) return prev;
+      const next = [...prev];
+      next[roundIdx] = {
+        ...round,
+        slots: removeCoachTableFromSlots(round.slots, cid)
+      };
+      return next;
+    });
+    autoFillEmptyTables(presentPlayers);
   };
   const applyMove = target => {
     if (!heldPlayerId) return;
@@ -3769,7 +3976,25 @@ function SessionScreen({
       fontSize: 13,
       padding: "8px 14px"
     }
-  }, `${coachNameFor(cid)}'s list${(coachingQueues[cid] || []).length > 0 ? ` (${coachingQueues[cid].length})` : ""}`)), phase === "playing" && /*#__PURE__*/React.createElement("button", {
+  }, `${coachNameFor(cid)}'s list${(coachingQueues[cid] || []).length > 0 ? ` (${coachingQueues[cid].length})` : ""}`)), [MARTIN_ID, KEITH_ID].map(cid => coachIds.includes(cid) ? /*#__PURE__*/React.createElement("button", {
+    key: `leave-${cid}`,
+    className: "ttc-btn ttc-btn-ghost",
+    onClick: () => setLeavingCoach(cid),
+    title: `${coachNameFor(cid)} has to leave early — give his table back to the players`,
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    }
+  }, `${coachNameFor(cid)} leaves`) : /*#__PURE__*/React.createElement("button", {
+    key: `add-${cid}`,
+    className: "ttc-btn ttc-btn-ghost",
+    onClick: () => setAddingCoach(cid),
+    title: `${coachNameFor(cid)} has arrived — give him a coach table`,
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    }
+  }, `+ Add ${coachNameFor(cid)}`)), phase === "playing" && /*#__PURE__*/React.createElement("button", {
     className: `ttc-btn ${paused ? "ttc-btn-primary" : ""}`,
     onClick: () => setPaused(p => !p),
     title: paused ? "Carry on with the countdown" : "Freeze the countdown (e.g. while you re-arrange tables)"
@@ -3871,7 +4096,7 @@ function SessionScreen({
     rosterError: rosterError,
     usingCache: usingCache,
     onRefreshRoster: onRefreshRoster,
-    coachTableCount: coachIds.length,
+    coachTables: coachTables,
     startTable: startTable,
     endTable: endTable,
     retiredTables: retiredTables,
@@ -3936,7 +4161,37 @@ function SessionScreen({
       }
     },
     onClose: () => setActivePlayerAction(null)
-  }), confirmingEndSession && /*#__PURE__*/React.createElement(ConfirmModal, {
+  }), addingCoach && (() => {
+    const name = coachNameFor(addingCoach);
+    const table = nextFreeCoachTable(coachTables, startTable);
+    const seat = currentRound && currentRound.slots.find(s => s.table === table && !s.isMartin);
+    const sitting = seat ? seat.ids.map(id => nameOf(players, id)) : [];
+    const keithAsPlayer = addingCoach === KEITH_ID && findKeithPlayer(players) && presentIds.has(findKeithPlayer(players).id);
+    const parts = phase === "break" ? [`${name} takes Table ${table} and joins the draw for the round about to start \u2014 that draw is redone, so any manual changes to it are lost.`] : [`${name} takes Table ${table} right now.`, sitting.length ? `${sitting.join(" and ")} will be moved to a free table, or wait at the side.` : null, `He gets a trainee in the next draw \u2014 or drag someone onto his table now.`];
+    if (keithAsPlayer) parts.push("Keith leaves the player list (his key still counts toward fees).");
+    return /*#__PURE__*/React.createElement(ConfirmModal, {
+      title: `Add ${name} as a coach?`,
+      body: parts.filter(Boolean).join(" "),
+      confirmLabel: `Add ${name}`,
+      confirmClassName: "ttc-btn ttc-btn-primary",
+      onConfirm: () => handleAddCoach(addingCoach),
+      onClose: () => setAddingCoach(null)
+    });
+  })(), leavingCoach && coachIds.includes(leavingCoach) && (() => {
+    const name = coachNameFor(leavingCoach);
+    const table = coachTables[leavingCoach];
+    const seat = currentRound && currentRound.slots.find(s => s.coachId === leavingCoach);
+    const trainee = seat && seat.ids.find(id => !isCoachId(id));
+    const parts = phase === "break" ? [`${name} leaves. The draw for the round about to start is redone without him, and Table ${table} goes back to being an ordinary table.`] : [`Table ${table} becomes an ordinary table right now.`, trainee ? `${nameOf(players, trainee)} moves to the side, and is paired with someone waiting if possible.` : null];
+    parts.push(`${name} still counts as having coached today (billing and attendance).`);
+    return /*#__PURE__*/React.createElement(ConfirmModal, {
+      title: `${name} is leaving?`,
+      body: parts.filter(Boolean).join(" "),
+      confirmLabel: `${name} has left`,
+      onConfirm: () => handleCoachLeaves(leavingCoach),
+      onClose: () => setLeavingCoach(null)
+    });
+  })(), confirmingEndSession && /*#__PURE__*/React.createElement(ConfirmModal, {
     title: "End session?",
     body: "This closes the board for everyone still playing.",
     confirmLabel: "End session",
