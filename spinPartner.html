@@ -971,14 +971,29 @@ function generateRound({
   orderedMatches.forEach((m, idx) => {
     m.table = peerTables[idx] ?? null;
   });
-  const overflowCount = Math.max(0, orderedMatches.length - peerTables.length);
+  const seated = orderedMatches.filter(m => m.table !== null);
+  // Nobody sits out if a table can take them: the odd one out, and the players
+  // of any match there's no table for, join tables that already have players
+  // (2 -> 3 first, then 3 -> 4). Only if every table is full do they wait.
+  const waiting = [...resting, ...orderedMatches.filter(m => m.table === null).flatMap(m => m.ids)];
+  const stillWaiting = seatWaitingOnTables(seated, waiting, (a, b) => combinedPairScore(pairHistory, pairLastRound, gradeMap, a, b));
+  seated.forEach(m => {
+    if (m.ids.length > 2) m.grade = matchGradeLabel(m.ids, gradeMap);
+    // A table that has grown to four plays as doubles, with teams chosen
+    // the same way as for a drawn doubles table.
+    if (m.ids.length === 4 && !m.teams) {
+      m.teams = splitTeams(m.ids, pairHistory, pairLastRound, prevPairsSet);
+      m.isDoubles = true;
+    }
+  });
   return {
     index: roundIndex,
     isDoubles,
-    matches: orderedMatches,
+    matches: seated,
     coachees,
-    resting,
-    overflowCount,
+    // Only players who really have no seat (every table already full).
+    resting: stillWaiting,
+    overflowCount: stillWaiting.length,
     sessionDate
   };
 }
@@ -1071,6 +1086,56 @@ const emptyHistory = () => ({
    demand rather than stored redundantly, so they can never drift out of
    sync with what's actually on the board.
    ============================================================ */
+/**
+ * Players left waiting at the side (an odd number of players, or more matches
+ * than tables) join tables that already have people instead of sitting out:
+ * first the tables with the fewest players (2 -> 3), and only once none of
+ * those are left the tables with 3 (3 -> 4). A table never goes past 4.
+ * Among tables of the smallest size, the player goes where `score` says they
+ * fit best (same grade / closest grade, and people they've played least).
+ * `groups` are objects with an `ids` array (a match or a board slot) and are
+ * added to in place; empty tables are skipped (they're for two waiting
+ * players together, which the caller handles first). Returns whoever still
+ * has no seat because every table is already full.
+ */
+function seatWaitingOnTables(groups, waiting, score) {
+  let left = [...waiting];
+  while (left.length > 0) {
+    const open = groups.filter(g => g.ids.length >= 1 && g.ids.length < 4);
+    if (open.length === 0) break;
+    const smallest = Math.min(...open.map(g => g.ids.length));
+    let best = null;
+    open.filter(g => g.ids.length === smallest).forEach(g => left.forEach(id => {
+      const cost = g.ids.reduce((sum, other) => sum + score(other, id), 0);
+      if (!best || cost < best.cost) best = {
+        g,
+        id,
+        cost
+      };
+    }));
+    best.g.ids.push(best.id);
+    left = left.filter(id => id !== best.id);
+  }
+  return left;
+}
+// The same rule for the live board: seats `waitingIds` on the ordinary tables
+// in `slots` (changed in place; callers pass copies). Tables with a coach
+// card on them are left alone. A table that reaches four players gets its
+// seats ordered as two teams, like a drawn doubles table. Returns how many
+// players were seated.
+function seatLeftoversOnBoard(slots, waitingIds, gradeMap, history) {
+  const groups = slots.filter(s => !s.isMartin && !s.isRetired && s.capacity >= 4 && !s.ids.some(isCoachId));
+  const sizeBefore = new Map(groups.map(g => [g, g.ids.length]));
+  const score = (a, b) => combinedPairScore(history.pairHistory, history.pairLastRound, gradeMap, a, b);
+  const stillWaiting = seatWaitingOnTables(groups, waitingIds, score);
+  groups.forEach(g => {
+    if (g.ids.length === 4 && sizeBefore.get(g) < 4) {
+      const teams = splitTeams(g.ids, history.pairHistory, history.pairLastRound, new Set());
+      g.ids = [...teams[0], ...teams[1]];
+    }
+  });
+  return waitingIds.length - stillWaiting.length;
+}
 function buildBoardSlots(round, coachTables, startTable, endTable, retiredTables) {
   const slots = [];
   // One table per coach, at the table they were given this session.
@@ -1262,17 +1327,20 @@ function recordPairingsForRound(slots, pairings) {
  * Turns one player's recorded pairings into the list written to the sheet:
  * alphabetical, a plain name for ordinary tables and "Name(D)" for doubles,
  * with " (n)" added when it happened more than once. A partner met both ways
- * appears twice, plain first: ["Mohand", "Mohand(D)", "Peter B (2)"].
+ * appears twice, plain first: ["Mohand G2", "Mohand G2(D)", "Peter B G1 (2)"].
+ * `gradeByName` ({ name: 1|2|3 }) adds the partner's grade (G1/G2/G3) right
+ * after the name; a name with no known grade is written without one.
  */
-function formatPartnerList(partnerMap) {
+function formatPartnerList(partnerMap, gradeByName) {
   const out = [];
   Object.keys(partnerMap || {}).sort((a, b) => a.localeCompare(b)).forEach(name => {
     const {
       s,
       d
     } = partnerMap[name];
-    if (s > 0) out.push(s > 1 ? `${name} (${s})` : name);
-    if (d > 0) out.push(d > 1 ? `${name}(D) (${d})` : `${name}(D)`);
+    const g = gradeByName && gradeByName[name] ? `${name} G${gradeByName[name]}` : name;
+    if (s > 0) out.push(s > 1 ? `${g} (${s})` : g);
+    if (d > 0) out.push(d > 1 ? `${g}(D) (${d})` : `${g}(D)`);
   });
   return out;
 }
@@ -3183,6 +3251,19 @@ function SessionScreen({
           }
         }
       }
+      // Anyone still waiting afterwards joins a table that already has people.
+      {
+        const seatedNow = new Set();
+        slots.forEach(s => s.ids.forEach(id => seatedNow.add(id)));
+        const waitingNow = presentPlayers.filter(p => !seatedNow.has(p.id)).map(p => p.id);
+        if (waitingNow.length > 0) {
+          const gm = {};
+          presentPlayers.forEach(p => {
+            gm[p.id] = p.grade;
+          });
+          seatLeftoversOnBoard(slots, waitingNow, gm, history);
+        }
+      }
       const next = [...prev];
       next[idx] = {
         ...round,
@@ -3301,9 +3382,13 @@ function SessionScreen({
     // someone's partner (see recordPairingsForRound); Keith only gets a row
     // when he's playing rather than coaching.
     const pairingNames = attendedPlayers.filter(p => !keithP || p.id !== keithP.id || pairingsRef.current[p.name]).map(p => p.name);
+    const gradeByName = {};
+    players.forEach(p => {
+      gradeByName[p.name] = p.grade;
+    });
     const pairings = pairingNames.map(name => ({
       name,
-      partners: formatPartnerList(pairingsRef.current[name])
+      partners: formatPartnerList(pairingsRef.current[name], gradeByName)
     }));
     // Build coaching history: one entry per round where someone was coached
     const coachingData = [...coachingLogRef.current];
@@ -3607,46 +3692,43 @@ function SessionScreen({
         onePlayerSlots = onePlayerSlots.filter(slot => slot !== best.slot);
         changed = true;
       }
-      // A lone arrival with no one-player table remains off-table. This
-      // avoids seating them alone on an otherwise empty table.
-      if (offBoard.length < 2) {
-        if (!changed) return prev;
-        next[currentRoundIdx] = { ...round, slots };
-        return next;
-      }
+      // Two or more still waiting go together onto an empty table; this is
+      // never one player alone at an empty table.
       const emptySlots = slots.filter(s => !s.isMartin && !s.isRetired && s.ids.length === 0);
-      if (emptySlots.length === 0) {
-        if (!changed) return prev;
-        next[currentRoundIdx] = { ...round, slots };
-        return next;
-      }
       const noConflicts = new Set();
       let slotIdx = 0;
-      if (isDoublesMode && offBoard.length >= 4) {
-        const {
-          quads,
-          leftover
-        } = buildQuads(offBoard, history.pairHistory, history.pairLastRound, noConflicts, gradeMap);
-        quads.forEach(q => {
-          if (slotIdx >= emptySlots.length) return;
-          const target = slots.find(s => s.key === emptySlots[slotIdx].key);
-          target.ids = q;
-          slotIdx++;
-        });
-        offBoard = leftover;
+      if (offBoard.length >= 2 && emptySlots.length > 0) {
+        if (isDoublesMode && offBoard.length >= 4) {
+          const {
+            quads,
+            leftover
+          } = buildQuads(offBoard, history.pairHistory, history.pairLastRound, noConflicts, gradeMap);
+          quads.forEach(q => {
+            if (slotIdx >= emptySlots.length) return;
+            const target = slots.find(s => s.key === emptySlots[slotIdx].key);
+            target.ids = q;
+            slotIdx++;
+          });
+          offBoard = leftover;
+        }
+        if (slotIdx < emptySlots.length && offBoard.length >= 2) {
+          const {
+            pairs
+          } = buildPairs(offBoard, history.pairHistory, history.pairLastRound, noConflicts, gradeMap);
+          pairs.forEach(pair => {
+            if (slotIdx >= emptySlots.length) return;
+            const target = slots.find(s => s.key === emptySlots[slotIdx].key);
+            target.ids = pair;
+            slotIdx++;
+            offBoard = offBoard.filter(id => !pair.includes(id));
+          });
+        }
       }
-      if (slotIdx < emptySlots.length && offBoard.length >= 2) {
-        const {
-          pairs
-        } = buildPairs(offBoard, history.pairHistory, history.pairLastRound, noConflicts, gradeMap);
-        pairs.forEach(pair => {
-          if (slotIdx >= emptySlots.length) return;
-          const target = slots.find(s => s.key === emptySlots[slotIdx].key);
-          target.ids = pair;
-          slotIdx++;
-        });
-      }
-      if (slotIdx === 0 && !changed) return prev;
+      if (slotIdx > 0) changed = true;
+      // Whoever is STILL waiting (a lone player, or no empty table left) joins a
+      // table that already has people: 2 -> 3 first, then 3 -> 4.
+      if (offBoard.length > 0 && seatLeftoversOnBoard(slots, offBoard, gradeMap, history) > 0) changed = true;
+      if (!changed) return prev;
       next[currentRoundIdx] = {
         ...round,
         slots
