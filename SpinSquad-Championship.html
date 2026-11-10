@@ -231,6 +231,29 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .score-input { width:76px; padding:10px; text-align:center; font-size:20px; font-weight:600; background:var(--surface2); border:1px solid var(--border); border-radius:8px; color:var(--text); font-family:'DM Sans',sans-serif; }
 .score-input:focus { outline:none; border-color:var(--accent); }
 .score-hint { font-size:11px; color:var(--muted); margin:4px 0 10px; }
+
+/* ── Event switcher ── */
+.event-bar { display:none; gap:8px; padding:10px 2rem; background:#0d1b2e; border-bottom:1px solid var(--border); }
+.event-btn { padding:6px 20px; border-radius:100px; border:1.5px solid var(--border); background:transparent; color:var(--muted); font-family:'DM Sans',sans-serif; font-size:12px; font-weight:600; letter-spacing:1px; text-transform:uppercase; cursor:pointer; transition:all .18s; }
+.event-btn:hover { color:var(--text); border-color:var(--muted); }
+.event-btn.active { background:var(--accent); color:#001a0e; border-color:var(--accent); }
+@media (max-width: 768px) { .event-bar { padding:10px 1rem; } }
+
+/* ── Doubles ── */
+.field-label { display:block; font-size:11px; color:var(--muted); letter-spacing:.6px; text-transform:uppercase; margin:12px 0 4px; }
+.d-textarea { height:120px; }
+.warn-box { background:rgba(255,77,109,0.08); border:1px solid rgba(255,77,109,0.3); color:var(--accent2); border-radius:8px; padding:10px 12px; font-size:12px; margin-bottom:12px; line-height:1.5; }
+.warn-text { font-size:12px; color:var(--accent3); margin:10px 0 0; line-height:1.5; }
+.draft-box { background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-top:14px; }
+.draft-title { font-family:'Bebas Neue',sans-serif; letter-spacing:1.5px; color:var(--accent); font-size:1.1rem; margin-bottom:6px; }
+.draft-list { margin:0 0 0 1.2rem; font-size:13px; line-height:1.9; }
+.tag { font-size:10px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--muted); border:1px solid var(--border); border-radius:100px; padding:1px 8px; margin-left:6px; }
+.tag.rnd { color:var(--accent3); border-color:rgba(251,191,36,0.4); }
+.pairs-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:10px; }
+.pair-card { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:14px; }
+.pair-n { font-family:'Bebas Neue',sans-serif; color:var(--accent); font-size:1.2rem; min-width:22px; }
+.pair-names { flex:1; }
+.pair-tag { font-size:13px; }
 </style>
 </head>
 <body>
@@ -245,19 +268,25 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     </div>
   </div>
   <div class="header-actions" id="header-actions" style="display:none">
-    <button class="btn btn-danger" id="reset-btn" onclick="resetTournament()" style="display:none">↺ Reset Draw</button>
+    <button class="btn btn-danger" id="reset-btn" onclick="resetTournament()" style="display:none">↺ Reset Singles Draw</button>
   </div>
   <span class="mode-badge view-badge">👁 View only</span>
 </header>
 
+<div class="event-bar" id="event-bar">
+  <button class="event-btn active" id="ev-singles" onclick="switchEvent('singles', true)">Singles</button>
+  <button class="event-btn" id="ev-doubles" onclick="switchEvent('doubles', true)">Doubles</button>
+</div>
+
 <div class="phase-bar" id="phase-bar">
   <div class="phase-tab" id="tab-setup" onclick="switchTab('setup', true)">Setup</div>
   <div class="phase-tab" id="tab-groups" onclick="switchTab('groups', true)">Groups</div>
+  <div class="phase-tab" id="tab-pairs" onclick="switchTab('pairs', true)" style="display:none">Pairs</div>
   <div class="phase-tab" id="tab-ko" onclick="switchTab('ko', true)">Knockout</div>
 </div>
 
 <main>
-  <!-- SETUP -->
+  <!-- SINGLES SETUP -->
   <div id="setup-panel">
     <div class="setup-grid">
       <div class="panel-card">
@@ -290,13 +319,54 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     </div>
   </div>
 
-  <!-- TOURNAMENT -->
+  <!-- DOUBLES SETUP -->
+  <div id="dsetup-panel" style="display:none">
+    <div class="setup-grid">
+      <div class="panel-card">
+        <h2>👥 Doubles Pairs</h2>
+        <div class="warn-box" id="d-backend-warning" style="display:none">
+          ⚠ Doubles can’t be saved to the sheet yet. Either the Google Apps Script (code.gs) hasn’t been updated for doubles and redeployed, or the sheet couldn’t be reached. Fix that, then reload this page. Singles is not affected.
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:.5rem;">Type who is playing doubles. Players who named a partner go in the first box, everyone else in the second — they will be paired at random.</p>
+        <label class="field-label" for="d-nominated">Nominated pairs — one pair per line, e.g. “Tony + Phil”</label>
+        <textarea class="import-textarea d-textarea" id="d-nominated" oninput="saveDoublesInputs()" placeholder="Tony + Phil&#10;Akira + Manui"></textarea>
+        <label class="field-label" for="d-loose">Players looking for a partner — one name per line</label>
+        <textarea class="import-textarea d-textarea" id="d-loose" oninput="saveDoublesInputs()" placeholder="Sean&#10;Liam&#10;Mica"></textarea>
+        <div class="setup-actions" style="margin-top:0">
+          <button class="btn btn-primary" onclick="pairUpDoubles()">🎲 Pair up players</button>
+        </div>
+        <div id="d-draft"></div>
+      </div>
+      <div class="panel-card">
+        <h2>🎲 Doubles Draw</h2>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 1rem;">Single knockout, no seeding: the pairs are placed at random, and if the number of pairs isn’t 4, 8, 16 or 32 the extra spots become BYEs in the first round. Singles is not affected.</p>
+        <button class="btn btn-primary" style="width:100%;padding:12px;" onclick="startDoublesDraw()">🎲 Make the Doubles Draw</button>
+        <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
+          <h2>📅 Doubles Schedule</h2>
+          <div id="d-schedule-box"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SINGLES -->
   <div id="tournament-panel" style="display:none">
     <div class="stats-bar" id="stats-bar"></div>
     <div id="groups-view"></div>
     <div id="ko-view" style="display:none">
       <div class="bracket-scroll">
         <div class="bracket-container" id="bracket-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DOUBLES -->
+  <div id="dtournament-panel" style="display:none">
+    <div class="stats-bar" id="dstats-bar"></div>
+    <div id="pairs-view"></div>
+    <div id="dko-view" style="display:none">
+      <div class="bracket-scroll">
+        <div class="bracket-container" id="dbracket-container"></div>
       </div>
     </div>
   </div>
@@ -336,6 +406,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 const SPINSQUAD_API = 'https://script.google.com/macros/s/AKfycbwg0xswunMLk4BmTUIcQBzL2NBjVDDFUQ3OJJxt2LljFL7w4vgAdx9OElgffuRi4-o9wg/exec';
 const STORAGE_KEY   = 'spinsquadchamp_v1';
 
+// Singles schedule slots
 const SCHEDULE = [
   { key:'groups', label:'Group stage' },
   { key:'r16',    label:'Round of 16' },
@@ -345,29 +416,36 @@ const SCHEDULE = [
 ];
 const KO_NAMES = ['Round of 16','Quarter-Finals','Semi-Finals','Final'];
 const KO_KEYS  = ['r16','qf','sf','final'];
+// Doubles knockout has 1-5 rounds depending on the number of pairs; names/keys are taken from the end
+const ALL_ROUND_NAMES = ['Round of 32','Round of 16','Quarter-Finals','Semi-Finals','Final'];
+const D_KEYS = ['d_r32','d_r16','d_qf','d_sf','d_final'];
+function roundNames(R)  { return ALL_ROUND_NAMES.slice(5 - R); }
+function doublesKeys(R) { return D_KEYS.slice(5 - R); }
+const MAX_PAIRS = 32;
 
-// Group draw: seeds 1-8 go to groups A-H in order; each lower row runs in reverse
+// Singles group draw: seeds 1-8 go to groups A-H in order; each lower row runs in reverse
 // (group A gets seeds 1, 16, 24, 32 ... group H gets 8, 9, 17, 25).
 const GROUP_NAMES = ['A','B','C','D','E','F','G','H'];
 function seedForGroup(row, g) { return row === 0 ? g + 1 : 8 * (row + 1) - g; }
-// Round-robin match order (indexes into a group's players, best seed first)
 const MATCH_ORDER = { 2:[[0,1]], 3:[[0,1],[0,2],[1,2]], 4:[[0,1],[2,3],[0,2],[1,3],[0,3],[1,2]] };
 // Round of 16 pairings in bracket order (matches 1&2 meet next, then 3&4, ...)
 const KO_PAIRS = [['A1','H2'],['C2','H1'],['F1','A2'],['F2','D1'],['C1','E2'],['B2','E1'],['G1','D2'],['G2','B1']];
 
 // ── Layout constants (knockout bracket) ────────────────────────────────
-const MATCH_W   = 180;
+const MATCH_W   = 180;   // singles card width
+const MATCH_W_D = 240;   // doubles card width (pair names are longer)
 const MATCH_H   = 76;
 const MATCH_GAP = 16;
 const COL_GAP   = 40;
 const HDR_H     = 44;
 const WINNER_W  = 220;
-const KO_FIRST  = 8;   // matches in the first knockout round
+const KO_FIRST  = 8;     // first-round matches in the singles knockout
 
 // ── Mode detection ─────────────────────────────────────────────────────
 // (no parameter) players: view everything and enter results
 // ?view           read-only
-// ?setup          organiser: setup, draw, reset, edit/clear results
+// ?setup          organiser: setup, draws, resets, edit/clear results
+// &event=doubles  open on the doubles event
 const PARAMS     = new URLSearchParams(window.location.search);
 const VIEW_MODE  = PARAMS.has('view');
 const SETUP_MODE = PARAMS.has('setup');
@@ -382,20 +460,26 @@ function esc(s) {
 function slotH(ri)       { return (MATCH_H + MATCH_GAP) * Math.pow(2, ri); }
 function matchTop(ri,mi) { const s = slotH(ri); return mi * s + (s - MATCH_H) / 2; }
 function matchCY(ri,mi)  { return matchTop(ri,mi) + MATCH_H / 2; }
-function colLeft(ri)     { return ri * (MATCH_W + COL_GAP); }
-function bracketH()      { return slotH(0) * KO_FIRST - MATCH_GAP; }
+function colLeft(ri, W)  { return ri * (W + COL_GAP); }
+function bracketH(first) { return slotH(0) * first - MATCH_GAP; }
 
 // ── State ──────────────────────────────────────────────────────────────
-let state = { players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false };
+function newDoubles() { return { nominatedText:'', looseText:'', draft:null, bracket:null, schedule:{} }; }
+let state = { players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false, doubles:newDoubles() };
+let currentEvent = PARAMS.get('event') === 'doubles' ? 'doubles' : 'singles';
 let currentTab = null, userSwitched = false, busy = false;
+let doublesBackendOK = false, doublesChecked = false;
 
 function hasTournament() { return !!(state.bracket && state.bracket.groups); }
+function hasDoubles()    { return !!(state.doubles && state.doubles.bracket && state.doubles.bracket.rounds); }
+function hasEvent(ev)    { return ev === 'doubles' ? hasDoubles() : hasTournament(); }
 
 function loadLocalState() {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
     if (s) state = Object.assign({ players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false }, JSON.parse(s));
   } catch(e) {}
+  state.doubles = Object.assign(newDoubles(), state.doubles || {});
   normalizeState();
 }
 function saveLocalState() {
@@ -407,9 +491,27 @@ function normalizeState() {
 }
 
 // ── Sync with the Google Sheet (shared by every device) ────────────────
-function applyRemote(data) {
+// Singles and doubles are stored separately, so a result in one never overwrites the other.
+function applyRemote(data, ev = 'singles') {
+  if (ev === 'doubles') {
+    // Only trust the reply if the Apps Script confirms it understood "doubles".
+    // An un-updated script would answer with the singles data, which must never be used here.
+    if (!data || data.event !== 'doubles') return false;
+    doublesBackendOK = true;
+  }
   if (!data || data.bracket === null || data.bracket === undefined) return false;
   const stored = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
+
+  if (ev === 'doubles') {
+    let b = (stored && stored.bracket !== undefined) ? stored.bracket : null;
+    if (b && !(b.rounds && b.teams)) b = null;
+    state.doubles.bracket = b || null;
+    if (stored && stored.schedule) state.doubles.schedule = stored.schedule;
+    saveLocalState();
+    return true;
+  }
+
+  if (stored && stored.kind === 'doubles') return false;
   let b = (stored && stored.bracket !== undefined) ? stored.bracket : stored;
   if (b && !b.groups) b = null;               // old-format draw: ignore
   state.bracket = b || null;
@@ -419,64 +521,80 @@ function applyRemote(data) {
   return true;
 }
 
-async function loadRemoteBracket(allowJsonp = true) {
+async function loadRemoteEvent(ev, allowJsonp = true) {
+  const r = await loadRemoteEventInner(ev, allowJsonp);
+  if (ev === 'doubles') { doublesChecked = true; updateDoublesWarning(); }
+  return r;
+}
+async function loadRemoteEventInner(ev, allowJsonp) {
+  const q = ev === 'doubles' ? '&event=doubles' : '';
   try {
-    const res = await fetch(SPINSQUAD_API + '?action=getTournament', { method:'GET', redirect:'follow', cache:'no-cache' });
+    const res = await fetch(SPINSQUAD_API + '?action=getTournament' + q, { method:'GET', redirect:'follow', cache:'no-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     if (!text) throw new Error('Empty response');
-    return applyRemote(JSON.parse(text));
+    return applyRemote(JSON.parse(text), ev);
   } catch(e) {
-    console.warn('Could not load remote bracket:', e.message);
-    return allowJsonp ? await loadRemoteViaJsonp() : false;
+    console.warn('Could not load remote ' + ev + ':', e.message);
+    return allowJsonp ? await loadRemoteViaJsonp(ev) : false;
   }
 }
+const loadRemoteBracket = (allowJsonp = true) => loadRemoteEvent('singles', allowJsonp);
 
-function loadRemoteViaJsonp() {
+function loadRemoteViaJsonp(ev) {
   return new Promise(resolve => {
-    const cb = 'cb_' + Date.now();
+    const cb = 'cb_' + ev + '_' + Date.now();
     const script = document.createElement('script');
     const timeout = setTimeout(() => { delete window[cb]; script.remove(); resolve(false); }, 8000);
     window[cb] = function(data) {
       clearTimeout(timeout); delete window[cb]; script.remove();
-      try { resolve(applyRemote(data)); } catch(e) { resolve(false); }
+      try { resolve(applyRemote(data, ev)); } catch(e) { resolve(false); }
     };
-    script.src = SPINSQUAD_API + '?action=getTournament&callback=' + cb;
+    script.src = SPINSQUAD_API + '?action=getTournament' + (ev === 'doubles' ? '&event=doubles' : '') + '&callback=' + cb;
     script.onerror = () => { clearTimeout(timeout); resolve(false); };
     document.head.appendChild(script);
   });
 }
 
-async function saveRemoteBracket() {
+async function saveRemoteEvent(ev) {
+  // Never write doubles unless the script is known to keep it separate (else it would overwrite singles)
+  if (ev === 'doubles' && !doublesBackendOK) return false;
+  const payload = ev === 'doubles'
+    ? { kind:'doubles', bracket: state.doubles.bracket, schedule: state.doubles.schedule }
+    : { bracket: state.bracket, drawn: state.drawn, schedule: state.schedule };
   // Apps Script needs a no-cors form POST; the response can't be read, so success = no network error
   const fd = new FormData();
   fd.append('action', 'saveTournament');
-  fd.append('bracket', JSON.stringify({ bracket: state.bracket, drawn: state.drawn, schedule: state.schedule }));
+  if (ev === 'doubles') fd.append('event', 'doubles');
+  fd.append('bracket', JSON.stringify(payload));
   try {
     await fetch(SPINSQUAD_API, { method:'POST', mode:'no-cors', body: fd });
     saveLocalState();
     return true;
   } catch(e) {
-    console.warn('Could not save remote bracket:', e.message);
+    console.warn('Could not save remote ' + ev + ':', e.message);
     saveLocalState();
     return false;
   }
 }
+const saveRemoteBracket = () => saveRemoteEvent('singles');
+
+function recomputeEvent(ev) { if (ev === 'doubles') recomputeDoubles(); else recomputeKnockout(); }
 
 // Apply one change safely: pull the latest data first so other players' results aren't overwritten
-async function commitChange(mutator, okMsg) {
+async function commitChange(mutator, okMsg, ev = 'singles') {
   if (busy) { showToast('One moment…'); return false; }
   busy = true;
   try {
     showLoadingIndicator(true);
-    await loadRemoteBracket(false);
-    if (!hasTournament()) { renderAll(); showToast('The draw was reset — please reload the page.'); return false; }
+    await loadRemoteEvent(ev, false);
+    if (!hasEvent(ev)) { renderAll(); showToast('The draw was reset — please reload the page.'); return false; }
     const err = mutator();
     if (err) { renderAll(); showToast(err); return false; }
-    recomputeKnockout();
+    recomputeEvent(ev);
     saveLocalState();
     renderAll();
-    const ok = await saveRemoteBracket();
+    const ok = await saveRemoteEvent(ev);
     showToast(ok ? okMsg : 'Saved on this device only — could not reach the sheet.');
     return ok;
   } finally {
@@ -485,7 +603,18 @@ async function commitChange(mutator, okMsg) {
   }
 }
 
-// ── Setup UI ───────────────────────────────────────────────────────────
+// ── Setup UI (singles) ─────────────────────────────────────────────────
+function clearPlayers() {
+  for (let i = 1; i <= 32; i++) { const el = $('p' + i); if (el) el.value = ''; }
+  state.players = []; state.playerRanks = [];
+  saveLocalState();
+  showToast(hasTournament()
+    ? 'Player list cleared. The current draw is unchanged — use Reset Singles Draw to remove it.'
+    : 'Player list cleared.');
+}
+
+
+
 function buildPlayerInputs() {
   const g = document.getElementById('players-grid');
   if (!g) return;
@@ -527,9 +656,6 @@ function savePlayers() {
   }
   state.players = inputNames; // keep for display/backwards compat
   saveLocalState(); showToast('Players saved!');
-}
-function clearPlayers() {
-  for (let i=1;i<=32;i++) { const el=document.getElementById(`p${i}`); if(el) el.value=''; }
 }
 
 function buildScheduleInputs() {
@@ -653,7 +779,7 @@ function confirmImport() {
   showToast(`${_importedPlayers.length} players imported!`);
 }
 
-// ── The draw: 8 groups of 4 by ladder seed ─────────────────────────────
+// ── Singles draw: 8 groups of 4 by ladder seed ─────────────────────────
 function startDraw() {
   if (hasTournament() && !confirm('A draw already exists. Making a new draw erases all groups, scores and results. Continue?')) return;
   savePlayers(); readScheduleInputs();
@@ -661,7 +787,7 @@ function startDraw() {
   const ranked = [...(state.playerRanks || [])]
     .filter(p => p && p.name)
     .sort((a, b) => a.rank - b.rank);          // lowest ladder rank = best = seed 1
-  if (ranked.length < 2) { showToast('Add at least 2 players first.'); return; }
+  if (ranked.length < 2) { showToast(hasTournament() ? 'Add at least 2 players first — the existing draw was left unchanged (use Reset Singles Draw to remove it).' : 'Add at least 2 players first.'); return; }
   const names = ranked.map(p => p.name);
   const dup = names.find((n, i) => names.indexOf(n) !== i);
   if (dup) { showToast('Two players are both called "' + dup + '" — make the names unique.'); return; }
@@ -694,6 +820,7 @@ function startDraw() {
   state.drawn = true;
   recomputeKnockout();
   saveLocalState();
+  currentEvent = 'singles';
   switchTab('groups', true);
   showToast('Draw complete! Saving to sheet…');
   showLoadingIndicator(true);
@@ -703,11 +830,53 @@ function startDraw() {
   });
 }
 
-function resetTournament() {
-  if (!confirm('Reset the draw? All groups, scores and results will be erased. Player names are kept.')) return;
-  state.drawn = false; state.bracket = null;
-  saveLocalState();
-  saveRemoteBracket().then(() => window.location.reload());
+// ── Reset (applies to the event currently shown) ───────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function reloadPage(ev) {
+  if (ev === 'doubles') {
+    const u = new URL(window.location.href); u.searchParams.set('event', 'doubles'); window.location.href = u.toString();
+  } else {
+    window.location.reload();
+  }
+}
+
+async function resetTournament() {
+  if (busy) return;
+  const ev = currentEvent;
+  const label = ev === 'doubles' ? 'doubles' : 'singles';
+  if (!confirm(`Reset the ${label} draw? All ${label} scores and results will be erased. The other event is not affected.`)) return;
+  busy = true;
+  showLoadingIndicator(true);
+  try {
+    if (ev === 'doubles') { state.doubles.bracket = null; state.doubles.schedule = {}; }
+    else { state.drawn = false; state.bracket = null; }
+    saveLocalState();
+
+    if (ev === 'doubles' && !doublesBackendOK) { reloadPage(ev); return; }   // nothing was ever saved to the sheet
+    await saveRemoteEvent(ev);
+
+    // Make sure the sheet really is empty now. If the save didn't go through, the old draw would
+    // simply reappear after a reload, so say so instead of failing silently.
+    let stillThere = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt) await sleep(1500);
+      await loadRemoteEvent(ev, false);          // puts whatever the sheet holds back into the page
+      stillThere = hasEvent(ev);
+      if (!stillThere) break;
+    }
+    if (stillThere) {
+      renderAll();
+      alert('The reset did not reach the Google Sheet, so the old ' + label + ' draw is still stored there and has been restored on screen.\n\n' +
+            'This usually means the Google Apps Script (code.gs) was not redeployed after the last edit, or it has an error. ' +
+            'Check Deploy → Manage deployments → Edit → New version → Deploy, then try again.');
+      return;
+    }
+    reloadPage(ev);
+  } finally {
+    busy = false;
+    showLoadingIndicator(false);
+  }
 }
 
 // ── Group standings and tiebreaks ──────────────────────────────────────
@@ -746,7 +915,28 @@ function computeStandings(g) {
   return out;
 }
 
-// ── Fill the knockout from the group results ───────────────────────────
+// ── Knockout logic shared by singles and doubles ───────────────────────
+// Fills each match from the winners of the previous round, auto-advances BYEs,
+// and discards any result whose players have changed upstream.
+function propagateRounds(rounds) {
+  rounds.forEach((round, ri) => round.forEach((m, mi) => {
+    if (ri > 0) {
+      m.p1 = rounds[ri-1][mi*2].winner   || null;
+      m.p2 = rounds[ri-1][mi*2+1].winner || null;
+    }
+    m.isBye = false;
+    if (m.p1 === 'BYE' || m.p2 === 'BYE') {
+      const other = m.p1 === 'BYE' ? m.p2 : m.p1;
+      m.winner = other || null;
+      m.isBye = !!other;
+      m.s1 = m.s2 = null; m.rec = null;
+    } else if (m.winner && (m.winner !== m.p1 && m.winner !== m.p2 || (m.rec && (m.rec[0] !== m.p1 || m.rec[1] !== m.p2)))) {
+      m.winner = null; m.s1 = m.s2 = null; m.rec = null;
+    }
+  }));
+}
+
+// Singles: the Round of 16 is filled from the group results
 function recomputeKnockout() {
   if (!hasTournament()) return;
   const t = state.bracket;
@@ -757,43 +947,191 @@ function recomputeKnockout() {
     resolved[g.name + '1'] = order ? (order[0] || 'BYE') : null;
     resolved[g.name + '2'] = order ? (order[1] || 'BYE') : null;
   });
-  t.rounds.forEach((round, ri) => round.forEach((m, mi) => {
-    if (ri === 0) { m.p1 = resolved[m.ref1] || null; m.p2 = resolved[m.ref2] || null; }
-    else {
-      m.p1 = t.rounds[ri-1][mi*2].winner   || null;
-      m.p2 = t.rounds[ri-1][mi*2+1].winner || null;
-    }
-    m.isBye = false;
-    if (m.p1 === 'BYE' || m.p2 === 'BYE') {
-      // Fewer than 16 qualifiers: the opponent advances automatically
-      const other = m.p1 === 'BYE' ? m.p2 : m.p1;
-      m.winner = other || null;
-      m.isBye = !!other;
-      m.s1 = m.s2 = null; m.rec = null;
-    } else if (m.winner && (m.winner !== m.p1 && m.winner !== m.p2 || (m.rec && (m.rec[0] !== m.p1 || m.rec[1] !== m.p2)))) {
-      m.winner = null; m.s1 = m.s2 = null; m.rec = null;   // players changed upstream: result no longer valid
-    }
-  }));
+  t.rounds[0].forEach(m => { m.p1 = resolved[m.ref1] || null; m.p2 = resolved[m.ref2] || null; });
+  propagateRounds(t.rounds);
+}
+
+// Doubles: first round is fixed at the draw
+function recomputeDoubles() {
+  if (hasDoubles()) propagateRounds(state.doubles.bracket.rounds);
+}
+
+// ── Doubles: pairing and draw ──────────────────────────────────────────
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function saveDoublesInputs() {
+  state.doubles.nominatedText = $('d-nominated') ? $('d-nominated').value : '';
+  state.doubles.looseText     = $('d-loose') ? $('d-loose').value : '';
+  saveLocalState();
+}
+function fillDoublesInputs() {
+  if ($('d-nominated')) $('d-nominated').value = state.doubles.nominatedText || '';
+  if ($('d-loose'))     $('d-loose').value     = state.doubles.looseText || '';
+  renderDoublesDraft();
+  renderDoublesScheduleBox();
+}
+
+function parseDoublesInputs() {
+  const errors = [], nominated = [];
+  ($('d-nominated').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).forEach(line => {
+    const parts = line.split(/\s*(?:\+|&|\/|,|\s+and\s+)\s*/i).map(s => s.trim()).filter(Boolean);
+    if (parts.length !== 2) errors.push(`"${line}" — write each pair as two names, for example: Tony + Phil`);
+    else nominated.push(parts);
+  });
+  const loose = ($('d-loose').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const all = [...nominated.flat(), ...loose];
+  const count = {};
+  all.forEach(n => { const k = n.toLowerCase(); count[k] = (count[k] || 0) + 1; });
+  Object.keys(count).filter(k => count[k] > 1).forEach(k =>
+    errors.push(`"${all.find(n => n.toLowerCase() === k)}" is listed more than once — a player can only be in one pair`));
+  return { nominated, loose, errors };
+}
+
+function pairUpDoubles() {
+  saveDoublesInputs();
+  const { nominated, loose, errors } = parseDoublesInputs();
+  if (errors.length) {
+    state.doubles.draft = null;
+    $('d-draft').innerHTML = '<div class="warn-box">' + errors.map(esc).join('<br>') + '</div>';
+    return;
+  }
+  const shuffled = shuffle(loose);
+  const randomPairs = [];
+  for (let i = 0; i + 1 < shuffled.length; i += 2) randomPairs.push({ a: shuffled[i], b: shuffled[i+1], random: true });
+  const leftover = shuffled.length % 2 ? shuffled[shuffled.length - 1] : null;
+  state.doubles.draft = {
+    pairs: [...nominated.map(p => ({ a: p[0], b: p[1], random: false })), ...randomPairs],
+    leftover
+  };
+  saveLocalState();
+  renderDoublesDraft();
+}
+
+function renderDoublesDraft() {
+  const el = $('d-draft');
+  if (!el) return;
+  const d = state.doubles.draft;
+  if (!d) { el.innerHTML = ''; return; }
+  let html = `<div class="draft-box"><div class="draft-title">${d.pairs.length} pair${d.pairs.length === 1 ? '' : 's'}</div><ol class="draft-list">` +
+    d.pairs.map(p => `<li>${esc(p.a)} &amp; ${esc(p.b)} <span class="tag${p.random ? ' rnd' : ''}">${p.random ? '🎲 random' : 'nominated'}</span></li>`).join('') + '</ol>';
+  if (d.leftover) html += `<p class="warn-text">⚠ ${esc(d.leftover)} has no partner (odd number of players) and will not be in the draw. Add one more name to the list and pair up again, or continue without them.</p>`;
+  if (d.pairs.some(p => p.random)) html += '<p class="group-note">Not happy with the random pairs? Press “Pair up players” again to re-roll them.</p>';
+  el.innerHTML = html + '</div>';
+}
+
+async function ensureDoublesBackend() {
+  if (!doublesBackendOK) await loadRemoteEvent('doubles', false);
+  return doublesBackendOK;
+}
+
+function updateDoublesWarning() {
+  const el = $('d-backend-warning');
+  if (!el) return;
+  el.style.display = (doublesChecked && !doublesBackendOK) ? 'block' : 'none';
+}
+
+async function startDoublesDraw() {
+  const d = state.doubles.draft;
+  if (!d || d.pairs.length < 2) { showToast('Pair up at least 2 pairs first.'); return; }
+  if (d.pairs.length > MAX_PAIRS) { showToast('Doubles supports up to ' + MAX_PAIRS + ' pairs.'); return; }
+  if (hasDoubles() && !confirm('A doubles draw already exists. Making a new draw erases all doubles results. Continue?')) return;
+
+  showLoadingIndicator(true);
+  const ok = await ensureDoublesBackend();
+  showLoadingIndicator(false);
+  if (!ok) { updateDoublesWarning(); showToast('Doubles can’t be saved yet — see the warning above.'); return; }
+
+  const teams = d.pairs.map((p, i) => ({ id: 't' + (i + 1), label: p.a + ' & ' + p.b, players: [p.a, p.b], random: !!p.random }));
+  const n = teams.length;
+  let S = 2; while (S < n) S *= 2;
+  const firstCount = S / 2, byes = S - n;
+  const order = shuffle(teams.map(t => t.label));
+  const first = Array.from({ length: firstCount }, () => [null, null]);
+  let ti = 0;
+  shuffle([...Array(firstCount).keys()]).forEach((mi, k) => {
+    if (k < byes) { const lab = order[ti++]; first[mi] = Math.random() < 0.5 ? [lab, 'BYE'] : ['BYE', lab]; }
+    else { first[mi] = [order[ti++], order[ti++]]; }
+  });
+  const rounds = [ first.map(([a, b], mi) => ({ id: `d_0_${mi}`, p1: a, p2: b, s1: null, s2: null, winner: null })) ];
+  while (rounds[rounds.length - 1].length > 1) {
+    const r = rounds.length;
+    rounds.push(Array.from({ length: rounds[r-1].length / 2 }, (_, mi) => ({ id: `d_${r}_${mi}`, p1: null, p2: null, s1: null, s2: null, winner: null })));
+  }
+  state.doubles.bracket = { format: 'doubles', teams, rounds };
+  recomputeDoubles();
+  saveLocalState();
+  currentEvent = 'doubles';
+  switchTab('ko', true);
+  renderDoublesScheduleBox();
+  showToast('Doubles draw complete! Saving to sheet…');
+  showLoadingIndicator(true);
+  saveRemoteEvent('doubles').then(saved => {
+    showLoadingIndicator(false);
+    showToast(saved ? 'Doubles draw saved! Players can now see it.' : 'Draw saved locally — sheet sync failed.');
+  });
+}
+
+function renderDoublesScheduleBox() {
+  const el = $('d-schedule-box');
+  if (!el) return;
+  if (!hasDoubles()) { el.innerHTML = '<p class="group-note">Dates can be set once the doubles draw has been made.</p>'; return; }
+  const R = state.doubles.bracket.rounds.length, names = roundNames(R), keys = doublesKeys(R);
+  el.innerHTML = '<div class="schedule-list">' + names.map((n, i) =>
+    `<div class="schedule-item"><span class="schedule-label">${n}</span><input class="schedule-input" type="datetime-local" id="dsched_${keys[i]}" value="${esc(state.doubles.schedule[keys[i]] || '')}"></div>`
+  ).join('') + '</div><div class="setup-actions" style="margin-top:1rem"><button class="btn btn-primary" onclick="saveDoublesSchedule()">✓ Save dates</button></div>';
+}
+function saveDoublesSchedule() {
+  if (!hasDoubles()) return;
+  const keys = doublesKeys(state.doubles.bracket.rounds.length);
+  const sched = {};
+  keys.forEach(k => { const v = $('dsched_' + k)?.value; if (v) sched[k] = v; });
+  commitChange(() => { state.doubles.schedule = sched; }, 'Dates saved!', 'doubles');
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────
-function noDrawHtml() {
-  return `<p style="color:var(--muted);padding:2rem 0;font-size:14px;">No draw yet.${SETUP_MODE ? ' Go to Setup to make the draw.' : ' Check back soon!'}</p>`;
+function noDrawHtml(ev) {
+  const msg = ev === 'doubles'
+    ? (SETUP_MODE ? ' Go to Setup to make the doubles draw.' : ' Doubles draw not made yet.')
+    : (SETUP_MODE ? ' Go to Setup to make the draw.' : ' Check back soon!');
+  return `<p style="color:var(--muted);padding:2rem 0;font-size:14px;">No draw yet.${msg}</p>`;
 }
 
 function renderAll() {
   recomputeKnockout();
+  recomputeDoubles();
   updateStats();
+  updateDoublesStats();
   renderGroups();
-  renderKnockout();
+  renderKO(singlesCfg());
+  renderPairs();
+  renderKO(doublesCfg());
   updateHeader();
+  updateEventSwitcher();
 }
 
 function updateHeader() {
   const actions = $('header-actions');
   if (actions) actions.style.display = SETUP_MODE ? '' : 'none';
   const reset = $('reset-btn');
-  if (reset) reset.style.display = (SETUP_MODE && hasTournament()) ? '' : 'none';
+  if (reset) {
+    reset.style.display = (SETUP_MODE && hasEvent(currentEvent)) ? '' : 'none';
+    reset.textContent = '↺ Reset ' + (currentEvent === 'doubles' ? 'Doubles' : 'Singles') + ' Draw';
+  }
+}
+
+function updateEventSwitcher() {
+  const bar = $('event-bar');
+  if (!bar) return;
+  bar.style.display = (SETUP_MODE || hasDoubles()) ? 'flex' : 'none';
+  $('ev-singles').classList.toggle('active', currentEvent === 'singles');
+  $('ev-doubles').classList.toggle('active', currentEvent === 'doubles');
 }
 
 function fmtWhen(v) {
@@ -805,7 +1143,7 @@ function fmtWhen(v) {
 function renderGroups() {
   const el = $('groups-view');
   if (!el) return;
-  if (!hasTournament()) { el.innerHTML = noDrawHtml(); return; }
+  if (!hasTournament()) { el.innerHTML = noDrawHtml('singles'); return; }
   let html = '';
   if (state.schedule.groups) html += `<p class="sched-note">📅 Group stage: ${fmtWhen(state.schedule.groups)} · top 2 from each group go through to the Round of 16</p>`;
   else html += `<p class="sched-note">Top 2 from each group go through to the Round of 16</p>`;
@@ -841,6 +1179,18 @@ function renderGroupCard(g) {
   return `<div class="group-card"><div class="group-title"><span>Group ${g.name}</span>${status}</div>${body}</div>`;
 }
 
+function renderPairs() {
+  const el = $('pairs-view');
+  if (!el) return;
+  if (!hasDoubles()) { el.innerHTML = noDrawHtml('doubles'); return; }
+  const t = state.doubles.bracket;
+  const anyRandom = t.teams.some(x => x.random);
+  el.innerHTML = `<p class="sched-note">${t.teams.length} pairs · single knockout${anyRandom ? ' · 🎲 = partner assigned at random' : ''}</p>` +
+    '<div class="pairs-grid">' + t.teams.map((x, i) =>
+      `<div class="pair-card"><span class="pair-n">${i + 1}</span><span class="pair-names">${esc(x.players[0])} &amp; ${esc(x.players[1])}</span>${x.random ? '<span class="pair-tag">🎲</span>' : ''}</div>`
+    ).join('') + '</div>';
+}
+
 function refLabel(ref) {
   return 'Group ' + ref[0] + ' – ' + (ref[1] === '1' ? '1st' : '2nd');
 }
@@ -853,53 +1203,66 @@ function slotCls(m, which) {
   return 'player-slot';
 }
 
-function koSlot(m, which, ri) {
+function koSlot(m, which, ri, info) {
   const p = m[which];
   const ref = which === 'p1' ? m.ref1 : m.ref2;
   const sc  = which === 'p1' ? m.s1 : m.s2;
   const label = p ? esc(p) : (ref ? refLabel(ref) : 'TBD');
-  const info = state.bracket.info && p ? state.bracket.info[p] : null;
-  const badge = (ri === 0 && info && info.rank) ? `<span class="seed-badge">${info.rank}</span>` : '';
+  const pinfo = info && p ? info[p] : null;
+  const badge = (ri === 0 && pinfo && pinfo.rank) ? `<span class="seed-badge">${pinfo.rank}</span>` : '';
   const score = (m.winner && sc != null) ? `<span class="score">${sc}</span>` : '';
   return `<div class="${slotCls(m, which)}">${badge}<span class="player-name">${label}</span>${score}</div>`;
 }
 
-function renderKnockout() {
-  const container = $('bracket-container');
-  if (!container) return;
-  if (!hasTournament()) { container.innerHTML = noDrawHtml(); return; }
+function singlesCfg() {
+  return { ev:'singles', t: hasTournament() ? state.bracket : null, container:'bracket-container',
+           names: KO_NAMES, keys: KO_KEYS, sched: state.schedule, W: MATCH_W,
+           info: hasTournament() ? state.bracket.info : null };
+}
+function doublesCfg() {
+  const t = hasDoubles() ? state.doubles.bracket : null;
+  const R = t ? t.rounds.length : 0;
+  return { ev:'doubles', t, container:'dbracket-container',
+           names: t ? roundNames(R) : [], keys: t ? doublesKeys(R) : [], sched: state.doubles.schedule, W: MATCH_W_D, info: null };
+}
 
-  const rounds = state.bracket.rounds;
-  const LAST = rounds.length - 1;
-  const totH = bracketH();
-  const totW = rounds.length * (MATCH_W + COL_GAP) + WINNER_W;
+function renderKO(cfg) {
+  const container = $(cfg.container);
+  if (!container) return;
+  if (!cfg.t) { container.innerHTML = noDrawHtml(cfg.ev); return; }
+
+  const rounds = cfg.t.rounds, LAST = rounds.length - 1, W = cfg.W;
+  const baseH = bracketH(rounds[0].length);
+  const totH  = Math.max(baseH, 230);            // small brackets are centred so the champion box fits
+  const off   = (totH - baseH) / 2;
+  const totW  = rounds.length * (W + COL_GAP) + WINNER_W;
   container.innerHTML = '';
 
   rounds.forEach((matches, ri) => {
     const col = document.createElement('div');
     col.className = 'round-col';
-    col.style.width = (MATCH_W + COL_GAP) + 'px';
+    col.style.width = (W + COL_GAP) + 'px';
 
     const hdr = document.createElement('div');
     hdr.className = 'round-header';
-    hdr.style.width = MATCH_W + 'px';
-    const sv = state.schedule[KO_KEYS[ri]];
-    hdr.innerHTML = KO_NAMES[ri] + (sv ? `<span class="round-date">${fmtWhen(sv)}</span>` : '');
+    hdr.style.width = W + 'px';
+    const sv = cfg.sched[cfg.keys[ri]];
+    hdr.innerHTML = cfg.names[ri] + (sv ? `<span class="round-date">${fmtWhen(sv)}</span>` : '');
     col.appendChild(hdr);
 
     const area = document.createElement('div');
     area.className = 'round-matches';
-    area.style.width = MATCH_W + 'px';
+    area.style.width = W + 'px';
     area.style.height = totH + 'px';
 
     matches.forEach((m, mi) => {
       const wrap = document.createElement('div');
       wrap.className = 'match-wrap';
-      wrap.style.top = matchTop(ri, mi) + 'px';
-      wrap.style.width = MATCH_W + 'px';
+      wrap.style.top = (matchTop(ri, mi) + off) + 'px';
+      wrap.style.width = W + 'px';
       const clickable = !VIEW_MODE && m.p1 && m.p2 && m.p1 !== 'BYE' && m.p2 !== 'BYE' && !m.isBye;
-      wrap.innerHTML = `<div class="match${clickable ? ' clickable' : ''}${m.isBye ? ' bye-match' : ''}"${clickable ? ` onclick="openScore('${m.id}')"` : ''}>
-          ${koSlot(m, 'p1', ri)}${koSlot(m, 'p2', ri)}
+      wrap.innerHTML = `<div class="match${clickable ? ' clickable' : ''}${m.isBye ? ' bye-match' : ''}" style="width:${W}px"${clickable ? ` onclick="openScore('${m.id}')"` : ''}>
+          ${koSlot(m, 'p1', ri, cfg.info)}${koSlot(m, 'p2', ri, cfg.info)}
         </div>`;
       area.appendChild(wrap);
     });
@@ -909,15 +1272,16 @@ function renderKnockout() {
 
   // Champion
   const champ = rounds[LAST][0].winner;
+  const champOk = champ && champ !== 'BYE';
   const champCol = document.createElement('div');
   champCol.className = 'round-col';
   champCol.style.width = WINNER_W + 'px';
   champCol.innerHTML = `<div class="round-header">Champion</div>
     <div style="position:relative;height:${totH}px;width:${WINNER_W}px;">
-      <div class="winner-display" style="top:${matchCY(LAST, 0) - 70}px">
+      <div class="winner-display" style="top:${Math.max(0, off + matchCY(LAST, 0) - 70)}px">
         <span class="trophy">🏆</span>
-        <span class="winner-label">Tournament Winner</span>
-        <span class="winner-name ${champ && champ !== 'BYE' ? '' : 'tbd'}">${champ && champ !== 'BYE' ? esc(champ) : '???'}</span>
+        <span class="winner-label">${cfg.ev === 'doubles' ? 'Doubles Winners' : 'Tournament Winner'}</span>
+        <span class="winner-name ${champOk ? '' : 'tbd'}">${champOk ? esc(champ) : '???'}</span>
       </div>
     </div>`;
   container.appendChild(champCol);
@@ -934,15 +1298,16 @@ function renderKnockout() {
     p.setAttribute('d', d); p.setAttribute('stroke', '#2a3550'); p.setAttribute('stroke-width', '1.5'); p.setAttribute('fill', 'none');
     svg.appendChild(p);
   };
+  const Y = (ri, mi) => HDR_H + off + matchCY(ri, mi);
   for (let ri = 0; ri < LAST; ri++) {
-    const xRight = colLeft(ri) + MATCH_W, xLeft = colLeft(ri + 1), xMid = (xRight + xLeft) / 2;
+    const xRight = colLeft(ri, W) + W, xLeft = colLeft(ri + 1, W), xMid = (xRight + xLeft) / 2;
     rounds[ri + 1].forEach((nm, nmi) => {
-      const cyA = HDR_H + matchCY(ri, nmi * 2), cyB = HDR_H + matchCY(ri, nmi * 2 + 1), cyN = HDR_H + matchCY(ri + 1, nmi);
+      const cyA = Y(ri, nmi * 2), cyB = Y(ri, nmi * 2 + 1), cyN = Y(ri + 1, nmi);
       line(`M${xRight},${cyA} H${xMid} M${xRight},${cyB} H${xMid} M${xMid},${cyA} V${cyB} M${xMid},${cyN} H${xLeft}`);
     });
   }
-  const xF = colLeft(LAST) + MATCH_W, cyF = HDR_H + matchCY(LAST, 0);
-  line(`M${xF},${cyF} H${xF + COL_GAP / 2}`);
+  const xF = colLeft(LAST, W) + W;
+  line(`M${xF},${Y(LAST, 0)} H${xF + COL_GAP / 2}`);
   container.appendChild(svg);
 }
 
@@ -961,14 +1326,36 @@ function updateStats() {
     ${champ && champ !== 'BYE' ? `<div class="stat"><span class="stat-val" style="color:var(--accent3)">🏆 ${esc(champ)}</span><span class="stat-label">Champion</span></div>` : ''}`;
 }
 
+function updateDoublesStats() {
+  const bar = $('dstats-bar');
+  if (!bar) return;
+  if (!hasDoubles()) { bar.innerHTML = ''; return; }
+  const t = state.doubles.bracket;
+  let kp = 0;
+  t.rounds.forEach(r => r.forEach(m => { if (m.winner && !m.isBye) kp++; }));
+  const champ = t.rounds[t.rounds.length - 1][0].winner;
+  bar.innerHTML = `
+    <div class="stat"><span class="stat-val">${t.teams.length}</span><span class="stat-label">Pairs</span></div>
+    <div class="stat"><span class="stat-val">${kp}</span><span class="stat-label">Games played</span></div>
+    ${champ && champ !== 'BYE' ? `<div class="stat"><span class="stat-val" style="color:var(--accent3)">🏆 ${esc(champ)}</span><span class="stat-label">Champions</span></div>` : ''}`;
+}
+
 // ── Entering a result (score) ──────────────────────────────────────────
 let scoreCtx = null;
 
+function eventOfMatch(id) { return String(id).startsWith('d_') ? 'doubles' : 'singles'; }
+
 function findAnyMatch(id) {
-  if (!hasTournament()) return null;
-  for (const g of state.bracket.groups) for (const m of g.matches) if (m.id === id) return { match:m, label:'Group ' + g.name };
-  for (let ri = 0; ri < state.bracket.rounds.length; ri++)
-    for (const m of state.bracket.rounds[ri]) if (m.id === id) return { match:m, label:KO_NAMES[ri] };
+  if (hasTournament()) {
+    for (const g of state.bracket.groups) for (const m of g.matches) if (m.id === id) return { match:m, label:'Group ' + g.name };
+    for (let ri = 0; ri < state.bracket.rounds.length; ri++)
+      for (const m of state.bracket.rounds[ri]) if (m.id === id) return { match:m, label:KO_NAMES[ri] };
+  }
+  if (hasDoubles()) {
+    const rounds = state.doubles.bracket.rounds, names = roundNames(rounds.length);
+    for (let ri = 0; ri < rounds.length; ri++)
+      for (const m of rounds[ri]) if (m.id === id) return { match:m, label:'Doubles — ' + names[ri] };
+  }
   return null;
 }
 
@@ -979,16 +1366,16 @@ function openScore(id) {
   const m = f.match;
   if (!m.p1 || !m.p2 || m.p1 === 'BYE' || m.p2 === 'BYE' || m.isBye) return;
   if (m.winner && !SETUP_MODE) { showToast('Result already recorded — ask the organiser to change it.'); return; }
-  scoreCtx = { id, p1: m.p1, p2: m.p2 };
+  scoreCtx = { id, p1: m.p1, p2: m.p2, ev: eventOfMatch(id) };
   $('modal-title').textContent = 'Enter score';
-  $('modal-sub').textContent = f.label + ' — games won by each player';
+  $('modal-sub').textContent = f.label + ' — games won by each side';
   const val = v => v != null ? v : '';
   $('modal-body').innerHTML = `
     <div class="score-row"><span class="score-name">${esc(m.p1)}</span>
       <input class="score-input" id="sc1" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s1)}"></div>
     <div class="score-row"><span class="score-name">${esc(m.p2)}</span>
       <input class="score-input" id="sc2" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s2)}" onkeydown="if(event.key==='Enter')saveScore()"></div>
-    <p class="score-hint">The player with more games wins the match.</p>
+    <p class="score-hint">The side with more games wins the match.</p>
     <button class="btn btn-primary" style="width:100%;padding:12px;margin-top:6px;" onclick="saveScore()">Save result</button>
     ${m.winner && SETUP_MODE ? `<button class="btn btn-danger" style="width:100%;margin-top:8px;" onclick="clearResult()">✕ Clear result</button>` : ''}`;
   $('modal-overlay').classList.add('open');
@@ -1002,8 +1389,8 @@ function closeModal(e) {
 function saveScore() {
   if (!scoreCtx) return;
   const a = parseInt($('sc1').value, 10), b = parseInt($('sc2').value, 10);
-  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { showToast('Enter the games won by both players.'); return; }
-  if (a === b) { showToast('A match cannot end level — one player must have more games.'); return; }
+  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { showToast('Enter the games won by both sides.'); return; }
+  if (a === b) { showToast('A match cannot end level — one side must have more games.'); return; }
   const ctx = scoreCtx;
   $('modal-overlay').classList.remove('open');
   const winner = a > b ? ctx.p1 : ctx.p2;
@@ -1014,7 +1401,7 @@ function saveScore() {
     if (m.p1 !== ctx.p1 || m.p2 !== ctx.p2) return 'This match has changed — please open it again.';
     if (m.winner && !SETUP_MODE) return 'Someone just recorded this result already.';
     m.s1 = a; m.s2 = b; m.winner = winner; m.rec = [m.p1, m.p2];
-  }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`);
+  }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`, ctx.ev);
 }
 
 function clearResult() {
@@ -1026,11 +1413,15 @@ function clearResult() {
     if (!f) return 'Match not found.';
     const m = f.match;
     m.s1 = m.s2 = m.winner = null; m.rec = null;
-  }, 'Result cleared.');
+  }, 'Result cleared.', ctx.ev);
 }
 
-// ── Tabs ───────────────────────────────────────────────────────────────
+// ── Tabs and events ────────────────────────────────────────────────────
 function defaultTab() {
+  if (currentEvent === 'doubles') {
+    if (!hasDoubles()) return SETUP_MODE ? 'setup' : 'pairs';
+    return 'ko';
+  }
   if (!hasTournament()) return SETUP_MODE ? 'setup' : 'groups';
   recomputeKnockout();
   const done = state.bracket.groups.every(g => g.matches.every(m => m.winner));
@@ -1039,14 +1430,34 @@ function defaultTab() {
 
 function switchTab(tab, byUser) {
   if (byUser) userSwitched = true;
+  const dbl = currentEvent === 'doubles';
+  if (dbl && tab === 'groups') tab = 'pairs';
+  if (!dbl && tab === 'pairs') tab = 'groups';
+  if (tab === 'setup' && !SETUP_MODE) tab = dbl ? 'pairs' : 'groups';
   currentTab = tab;
-  ['setup','groups','ko'].forEach(t => { const el = $('tab-' + t); if (el) el.classList.toggle('active', t === tab); });
-  $('setup-panel').style.display      = tab === 'setup' ? 'block' : 'none';
-  $('tournament-panel').style.display = tab === 'setup' ? 'none' : 'block';
-  $('groups-view').style.display      = tab === 'groups' ? 'block' : 'none';
-  $('ko-view').style.display          = tab === 'ko' ? 'block' : 'none';
-  if (tab !== 'setup') renderAll();
+  const setup = tab === 'setup';
+  ['setup','groups','pairs','ko'].forEach(t => { const el = $('tab-' + t); if (el) el.classList.toggle('active', t === tab); });
+  $('tab-groups').style.display = dbl ? 'none' : '';
+  $('tab-pairs').style.display  = dbl ? '' : 'none';
+  $('tab-setup').style.display  = SETUP_MODE ? '' : 'none';
+  $('setup-panel').style.display       = (!dbl && setup)  ? 'block' : 'none';
+  $('dsetup-panel').style.display      = (dbl && setup)   ? 'block' : 'none';
+  $('tournament-panel').style.display  = (!dbl && !setup) ? 'block' : 'none';
+  $('dtournament-panel').style.display = (dbl && !setup)  ? 'block' : 'none';
+  $('groups-view').style.display = tab === 'groups' ? 'block' : 'none';
+  $('ko-view').style.display     = (!dbl && tab === 'ko') ? 'block' : 'none';
+  $('pairs-view').style.display  = tab === 'pairs' ? 'block' : 'none';
+  $('dko-view').style.display    = (dbl && tab === 'ko') ? 'block' : 'none';
+  if (!setup) renderAll();
   updateHeader();
+  updateEventSwitcher();
+}
+
+function switchEvent(ev, byUser) {
+  if (byUser) userSwitched = true;
+  currentEvent = ev;
+  const keepSetup = currentTab === 'setup' && SETUP_MODE;
+  switchTab(keepSetup ? 'setup' : defaultTab());
 }
 
 function showLoadingIndicator(on) {
@@ -1063,17 +1474,21 @@ function showToast(msg) {
 
 // ── Boot ───────────────────────────────────────────────────────────────
 loadLocalState();
-if (SETUP_MODE) { buildPlayerInputs(); buildScheduleInputs(); fillInputsFromState(); }
-else { $('tab-setup').style.display = 'none'; }
+if (SETUP_MODE) { buildPlayerInputs(); buildScheduleInputs(); fillInputsFromState(); fillDoublesInputs(); }
 switchTab(defaultTab());
 
 showLoadingIndicator(true);
-loadRemoteBracket().then(loaded => {
+Promise.all([ loadRemoteEvent('singles'), loadRemoteEvent('doubles') ]).then(([gotSingles, gotDoubles]) => {
   showLoadingIndicator(false);
-  if (!loaded) return;
-  if (SETUP_MODE) fillScheduleInputs();
-  if (!userSwitched) switchTab(defaultTab()); else if (currentTab !== 'setup') renderAll();
+  if (!gotSingles && !gotDoubles) { updateEventSwitcher(); return; }
+  if (SETUP_MODE) { fillScheduleInputs(); renderDoublesScheduleBox(); }
+  if (!userSwitched) {
+    // A player opening the page before any singles draw exists but after doubles does: show doubles
+    if (!SETUP_MODE && currentEvent === 'singles' && !hasTournament() && hasDoubles()) currentEvent = 'doubles';
+    switchTab(defaultTab());
+  } else if (currentTab !== 'setup') renderAll();
   updateHeader();
+  updateEventSwitcher();
 });
 
 </script>
