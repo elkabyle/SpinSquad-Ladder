@@ -254,6 +254,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .pair-n { font-family:'Bebas Neue',sans-serif; color:var(--accent); font-size:1.2rem; min-width:22px; }
 .pair-names { flex:1; }
 .pair-tag { font-size:13px; }
+.score-preview { font-size:13px; font-weight:600; min-height:18px; margin:2px 0 6px; }
 </style>
 </head>
 <body>
@@ -1369,16 +1370,18 @@ function openScore(id) {
   scoreCtx = { id, p1: m.p1, p2: m.p2, ev: eventOfMatch(id) };
   $('modal-title').textContent = 'Enter score';
   $('modal-sub').textContent = f.label + ' — games won by each side';
-  const val = v => v != null ? v : '';
+  const val = v => v != null ? v : 0;      // start at 0 so only the winner's games need typing
   $('modal-body').innerHTML = `
     <div class="score-row"><span class="score-name">${esc(m.p1)}</span>
-      <input class="score-input" id="sc1" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s1)}"></div>
+      <input class="score-input" id="sc1" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s1)}" onfocus="this.select()" oninput="updateScorePreview()"></div>
     <div class="score-row"><span class="score-name">${esc(m.p2)}</span>
-      <input class="score-input" id="sc2" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s2)}" onkeydown="if(event.key==='Enter')saveScore()"></div>
-    <p class="score-hint">The side with more games wins the match.</p>
+      <input class="score-input" id="sc2" type="number" inputmode="numeric" min="0" max="99" value="${val(m.s2)}" onfocus="this.select()" oninput="updateScorePreview()" onkeydown="if(event.key==='Enter')saveScore()"></div>
+    <p class="score-preview" id="score-preview"></p>
+    <p class="score-hint">Type the games each side won — an empty box counts as 0.</p>
     <button class="btn btn-primary" style="width:100%;padding:12px;margin-top:6px;" onclick="saveScore()">Save result</button>
     ${m.winner && SETUP_MODE ? `<button class="btn btn-danger" style="width:100%;margin-top:8px;" onclick="clearResult()">✕ Clear result</button>` : ''}`;
   $('modal-overlay').classList.add('open');
+  updateScorePreview();
   setTimeout(() => { const el = $('sc1'); if (el) el.focus(); }, 50);
 }
 
@@ -1386,10 +1389,25 @@ function closeModal(e) {
   if (!e || e.target === $('modal-overlay')) $('modal-overlay').classList.remove('open');
 }
 
+function scoreValue(id) {                       // empty box = 0 games
+  const raw = ($(id).value || '').trim();
+  return raw === '' ? 0 : parseInt(raw, 10);
+}
+
+function updateScorePreview() {
+  const el = $('score-preview');
+  if (!el || !scoreCtx || !$('sc1')) return;
+  const a = scoreValue('sc1'), b = scoreValue('sc2');
+  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { el.style.color = 'var(--accent2)'; el.textContent = 'Enter whole numbers, 0 or more.'; return; }
+  if (a === b) { el.style.color = 'var(--muted)'; el.textContent = 'Enter the games won — the scores can’t be level.'; return; }
+  el.style.color = 'var(--accent)';
+  el.textContent = '→ ' + (a > b ? scoreCtx.p1 : scoreCtx.p2) + ' wins ' + Math.max(a, b) + '–' + Math.min(a, b);
+}
+
 function saveScore() {
   if (!scoreCtx) return;
-  const a = parseInt($('sc1').value, 10), b = parseInt($('sc2').value, 10);
-  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { showToast('Enter the games won by both sides.'); return; }
+  const a = scoreValue('sc1'), b = scoreValue('sc2');
+  if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { showToast('Enter whole numbers, 0 or more.'); return; }
   if (a === b) { showToast('A match cannot end level — one side must have more games.'); return; }
   const ctx = scoreCtx;
   $('modal-overlay').classList.remove('open');
