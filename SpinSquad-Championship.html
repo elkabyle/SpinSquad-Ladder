@@ -23,7 +23,7 @@
 body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
 
 /* ── Header ── */
-header {
+header {å
   background: #0d1b2e; border-bottom: 1px solid var(--border);
   padding: 1.25rem 2rem; display: flex; align-items: center; justify-content: space-between;
   position: sticky; top: 0; z-index: 100;
@@ -254,6 +254,13 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .pair-n { font-family:'Bebas Neue',sans-serif; color:var(--accent); font-size:1.2rem; min-width:22px; }
 .pair-names { flex:1; }
 .pair-tag { font-size:13px; }
+.d-select { width:100%; padding:8px 10px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'DM Sans',sans-serif; font-size:13px; }
+.d-select:focus { outline:none; border-color:var(--accent); }
+.seedno { display:inline-block; min-width:22px; text-align:center; font-family:'Bebas Neue',sans-serif; font-size:1.05rem; color:var(--accent); margin-right:8px; }
+.tot { font-size:11px; color:var(--muted); margin-left:4px; }
+.unr { color:var(--accent3); }
+.move-btn { background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:4px; font-size:10px; padding:1px 6px; margin-left:4px; cursor:pointer; }
+.move-btn:hover { color:var(--accent); border-color:var(--accent); }
 .score-preview { font-size:13px; font-weight:600; min-height:18px; margin:2px 0 6px; }
 </style>
 </head>
@@ -333,14 +340,20 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
         <textarea class="import-textarea d-textarea" id="d-nominated" oninput="saveDoublesInputs()" placeholder="Tony + Phil&#10;Akira + Manui"></textarea>
         <label class="field-label" for="d-loose">Players looking for a partner — one name per line</label>
         <textarea class="import-textarea d-textarea" id="d-loose" oninput="saveDoublesInputs()" placeholder="Sean&#10;Liam&#10;Mica"></textarea>
-        <div class="setup-actions" style="margin-top:0">
+        <label class="field-label" for="d-seeding">Seeding</label>
+        <select class="d-select" id="d-seeding" onchange="setDoublesSeeding(this.value)">
+          <option value="auto">Seed by ladder rank (best pairs kept apart)</option>
+          <option value="manual">Seed in the order listed (manual)</option>
+          <option value="none">No seeding (fully random)</option>
+        </select>
+        <div class="setup-actions" style="margin-top:12px">
           <button class="btn btn-primary" onclick="pairUpDoubles()">🎲 Pair up players</button>
         </div>
         <div id="d-draft"></div>
       </div>
       <div class="panel-card">
         <h2>🎲 Doubles Draw</h2>
-        <p style="font-size:12px;color:var(--muted);margin:0 0 1rem;">Single knockout, no seeding: the pairs are placed at random, and if the number of pairs isn’t 4, 8, 16 or 32 the extra spots become BYEs in the first round. Singles is not affected.</p>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 1rem;">Single knockout, seeded as chosen on the left (or fully random if seeding is off). The best seeds are kept apart so they can only meet late, and if the number of pairs isn’t 4, 8, 16 or 32 the spare spots become first-round BYEs, given to the top seeds first. Singles is not affected.</p>
         <button class="btn btn-primary" style="width:100%;padding:12px;" onclick="startDoublesDraw()">🎲 Make the Doubles Draw</button>
         <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
           <h2>📅 Doubles Schedule</h2>
@@ -465,7 +478,7 @@ function colLeft(ri, W)  { return ri * (W + COL_GAP); }
 function bracketH(first) { return slotH(0) * first - MATCH_GAP; }
 
 // ── State ──────────────────────────────────────────────────────────────
-function newDoubles() { return { nominatedText:'', looseText:'', draft:null, bracket:null, schedule:{} }; }
+function newDoubles() { return { nominatedText:'', looseText:'', draft:null, bracket:null, schedule:{}, seeding:'auto' }; }
 let state = { players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false, doubles:newDoubles() };
 let currentEvent = PARAMS.get('event') === 'doubles' ? 'doubles' : 'singles';
 let currentTab = null, userSwitched = false, busy = false;
@@ -967,6 +980,72 @@ function shuffle(arr) {
   return a;
 }
 
+// ── Doubles seeding ────────────────────────────────────────────────────
+// Modes: 'auto'   = strongest pair first, using the two players' ladder ranks added together
+//        'manual' = the order of the pairs list is the seed order (1 = top seed)
+//        'none'   = fully random draw
+function rankLookup() {
+  const map = {}; let max = 0;
+  (state.playerRanks || []).forEach(p => {
+    if (p && p.name && p.rank < 999) { map[p.name.trim().toLowerCase()] = p.rank; if (p.rank > max) max = p.rank; }
+  });
+  return { map, unranked: max + 1, any: max > 0 };    // players not on the ladder count as just below the weakest
+}
+function pairStrength(p, rl) {
+  const ra = rl.map[String(p.a).trim().toLowerCase()], rb = rl.map[String(p.b).trim().toLowerCase()];
+  const va = ra != null ? ra : rl.unranked, vb = rb != null ? rb : rl.unranked;
+  return { ra, rb, sum: va + vb, best: Math.min(va, vb) };
+}
+// Seed order: lowest total first; a tie goes to the pair with the better single player; any remaining tie is random
+function orderForSeeding(pairs, mode) {
+  if (mode === 'manual') return pairs.slice();
+  const rl = rankLookup();
+  return pairs.map(p => ({ p, st: pairStrength(p, rl) }))
+    .sort((x, y) => x.st.sum - y.st.sum || x.st.best - y.st.best || (x.p.tie || 0) - (y.p.tie || 0))
+    .map(k => k.p);
+}
+// Standard bracket order for a draw of size S (e.g. 8 -> 1,8,4,5,2,7,3,6)
+function standardOrder(S) {
+  let o = [1];
+  while (o.length < S) { const n = o.length * 2; o = o.flatMap(x => [x, n + 1 - x]); }
+  return o;
+}
+// Seeded first round. labels[0] is seed 1. The top half of the field (one favourite per match) is placed
+// in tiers so the best pairs can only meet late; the rest are drawn at random; BYEs go to the top seeds first.
+function seededFirstRound(labels) {
+  const n = labels.length;
+  let S = 2; while (S < n) S *= 2;
+  const M = S / 2, B = S - n;
+  const order = standardOrder(S);
+  const fav = [];
+  for (let i = 0; i < M; i++) fav.push(order[2 * i]);        // favourite seed in each first-round match, in bracket order
+  [[1], [2], [3, 4], [5, 6, 7, 8], [9, 10, 11, 12, 13, 14, 15, 16]].forEach(tier => {
+    const idx = fav.map((sd, i) => tier.includes(sd) ? i : -1).filter(i => i >= 0);
+    const seeds = shuffle(idx.map(i => fav[i]));
+    idx.forEach((pos, k) => { fav[pos] = seeds[k]; });          // random order within a tier
+  });
+  const matchOf = {}; fav.forEach((sd, i) => { matchOf[sd] = i; });
+  const first = fav.map(sd => [labels[sd - 1], null]);
+  for (let k = 1; k <= B; k++) first[matchOf[k]][1] = 'BYE';   // top seeds get the BYEs
+  const rest = shuffle(labels.slice(M));                       // everyone else drawn at random
+  let u = 0;
+  first.forEach(m => { if (m[1] === null) m[1] = rest[u++]; });
+  return first;
+}
+
+function setDoublesSeeding(v) {
+  state.doubles.seeding = ['auto', 'manual', 'none'].includes(v) ? v : 'auto';
+  saveLocalState();
+  renderDoublesDraft();
+}
+function moveDraftPair(i, dir) {
+  const d = state.doubles.draft;
+  if (!d || i + dir < 0 || i + dir >= d.pairs.length) return;
+  [d.pairs[i], d.pairs[i + dir]] = [d.pairs[i + dir], d.pairs[i]];
+  saveLocalState();
+  renderDoublesDraft();
+}
+
 function saveDoublesInputs() {
   state.doubles.nominatedText = $('d-nominated') ? $('d-nominated').value : '';
   state.doubles.looseText     = $('d-loose') ? $('d-loose').value : '';
@@ -975,6 +1054,7 @@ function saveDoublesInputs() {
 function fillDoublesInputs() {
   if ($('d-nominated')) $('d-nominated').value = state.doubles.nominatedText || '';
   if ($('d-loose'))     $('d-loose').value     = state.doubles.looseText || '';
+  if ($('d-seeding'))   $('d-seeding').value   = state.doubles.seeding || 'auto';
   renderDoublesDraft();
   renderDoublesScheduleBox();
 }
@@ -1008,7 +1088,7 @@ function pairUpDoubles() {
   for (let i = 0; i + 1 < shuffled.length; i += 2) randomPairs.push({ a: shuffled[i], b: shuffled[i+1], random: true });
   const leftover = shuffled.length % 2 ? shuffled[shuffled.length - 1] : null;
   state.doubles.draft = {
-    pairs: [...nominated.map(p => ({ a: p[0], b: p[1], random: false })), ...randomPairs],
+    pairs: [...nominated.map(p => ({ a: p[0], b: p[1], random: false })), ...randomPairs].map(x => Object.assign(x, { tie: Math.random() })),
     leftover
   };
   saveLocalState();
@@ -1020,10 +1100,32 @@ function renderDoublesDraft() {
   if (!el) return;
   const d = state.doubles.draft;
   if (!d) { el.innerHTML = ''; return; }
-  let html = `<div class="draft-box"><div class="draft-title">${d.pairs.length} pair${d.pairs.length === 1 ? '' : 's'}</div><ol class="draft-list">` +
-    d.pairs.map(p => `<li>${esc(p.a)} &amp; ${esc(p.b)} <span class="tag${p.random ? ' rnd' : ''}">${p.random ? '🎲 random' : 'nominated'}</span></li>`).join('') + '</ol>';
+  const mode = state.doubles.seeding || 'auto';
+  const rl = rankLookup();
+  const rows = mode === 'none'
+    ? d.pairs.map(p => ({ p, seed: null, idx: d.pairs.indexOf(p) }))
+    : (mode === 'manual' ? d.pairs.slice() : orderForSeeding(d.pairs, 'auto')).map((p, i) => ({ p, seed: i + 1, idx: d.pairs.indexOf(p) }));
+  const who = name => {
+    const r = rl.map[String(name).trim().toLowerCase()];
+    return esc(name) + (r != null ? ` <small>#${r}</small>` : (mode === 'auto' ? ' <small class="unr">unranked</small>' : ''));
+  };
+  let html = `<div class="draft-box"><div class="draft-title">${d.pairs.length} pair${d.pairs.length === 1 ? '' : 's'}${mode === 'none' ? '' : ' — seed order'}</div><ol class="draft-list" style="list-style:none;margin-left:0">` +
+    rows.map(({ p, seed, idx }) => {
+      const st = pairStrength(p, rl);
+      return `<li>${seed ? `<span class="seedno">${seed}</span>` : ''}${who(p.a)} &amp; ${who(p.b)}` +
+        (mode === 'auto' ? ` <span class="tot">total ${st.sum}</span>` : '') +
+        ` <span class="tag${p.random ? ' rnd' : ''}">${p.random ? '🎲 random' : 'nominated'}</span>` +
+        (mode === 'manual' ? ` <button class="move-btn" onclick="moveDraftPair(${idx}, -1)" title="Move up">▲</button><button class="move-btn" onclick="moveDraftPair(${idx}, 1)" title="Move down">▼</button>` : '') +
+        '</li>';
+    }).join('') + '</ol>';
+  if (mode === 'auto' && !rl.any) html += '<p class="warn-text">⚠ No ladder ranks are loaded on this device, so every pair counts as equal and the seeding is effectively random. Use “Load from SpinSquad” in the Singles setup first, or switch to manual seeding.</p>';
+  else if (mode === 'auto') {
+    const unranked = [...new Set(d.pairs.flatMap(p => [p.a, p.b]).filter(n => rl.map[String(n).trim().toLowerCase()] == null))];
+    if (unranked.length) html += `<p class="group-note">Not found on the ladder (counted as the weakest): ${unranked.map(esc).join(', ')}. Check the spelling if that is a mistake.</p>`;
+  }
+  if (mode === 'manual') html += '<p class="group-note">Manual seeding: the list order is the seed order. Nominated pairs are listed in the order you typed them; use ▲ ▼ to change it.</p>';
   if (d.leftover) html += `<p class="warn-text">⚠ ${esc(d.leftover)} has no partner (odd number of players) and will not be in the draw. Add one more name to the list and pair up again, or continue without them.</p>`;
-  if (d.pairs.some(p => p.random)) html += '<p class="group-note">Not happy with the random pairs? Press “Pair up players” again to re-roll them.</p>';
+  if (d.pairs.some(p => p.random)) html += '<p class="group-note">Not happy with the random pairs? Press “Pair up players” again to re-roll them' + (mode === 'manual' ? ' (this also resets any manual ordering).' : '.') + '</p>';
   el.innerHTML = html + '</div>';
 }
 
@@ -1049,17 +1151,29 @@ async function startDoublesDraw() {
   showLoadingIndicator(false);
   if (!ok) { updateDoublesWarning(); showToast('Doubles can’t be saved yet — see the warning above.'); return; }
 
-  const teams = d.pairs.map((p, i) => ({ id: 't' + (i + 1), label: p.a + ' & ' + p.b, players: [p.a, p.b], random: !!p.random }));
+  const mode = state.doubles.seeding || 'auto';
+  const seeded = mode !== 'none';
+  const ordered = seeded ? orderForSeeding(d.pairs, mode) : d.pairs;
+  const rl = rankLookup();
+  const teams = ordered.map((p, i) => ({
+    id: 't' + (i + 1), label: p.a + ' & ' + p.b, players: [p.a, p.b], random: !!p.random,
+    seed: seeded ? i + 1 : null, rankSum: mode === 'auto' ? pairStrength(p, rl).sum : null
+  }));
   const n = teams.length;
-  let S = 2; while (S < n) S *= 2;
-  const firstCount = S / 2, byes = S - n;
-  const order = shuffle(teams.map(t => t.label));
-  const first = Array.from({ length: firstCount }, () => [null, null]);
-  let ti = 0;
-  shuffle([...Array(firstCount).keys()]).forEach((mi, k) => {
-    if (k < byes) { const lab = order[ti++]; first[mi] = Math.random() < 0.5 ? [lab, 'BYE'] : ['BYE', lab]; }
-    else { first[mi] = [order[ti++], order[ti++]]; }
-  });
+  let first;
+  if (seeded) {
+    first = seededFirstRound(teams.map(t => t.label));
+  } else {
+    let S = 2; while (S < n) S *= 2;
+    const firstCount = S / 2, byes = S - n;
+    const order = shuffle(teams.map(t => t.label));
+    first = Array.from({ length: firstCount }, () => [null, null]);
+    let ti = 0;
+    shuffle([...Array(firstCount).keys()]).forEach((mi, k) => {
+      if (k < byes) { const lab = order[ti++]; first[mi] = Math.random() < 0.5 ? [lab, 'BYE'] : ['BYE', lab]; }
+      else { first[mi] = [order[ti++], order[ti++]]; }
+    });
+  }
   const rounds = [ first.map(([a, b], mi) => ({ id: `d_0_${mi}`, p1: a, p2: b, s1: null, s2: null, winner: null })) ];
   while (rounds[rounds.length - 1].length > 1) {
     const r = rounds.length;
@@ -1185,10 +1299,10 @@ function renderPairs() {
   if (!el) return;
   if (!hasDoubles()) { el.innerHTML = noDrawHtml('doubles'); return; }
   const t = state.doubles.bracket;
-  const anyRandom = t.teams.some(x => x.random);
-  el.innerHTML = `<p class="sched-note">${t.teams.length} pairs · single knockout${anyRandom ? ' · 🎲 = partner assigned at random' : ''}</p>` +
+  const anyRandom = t.teams.some(x => x.random), seeded = t.teams.some(x => x.seed);
+  el.innerHTML = `<p class="sched-note">${t.teams.length} pairs · single knockout${seeded ? ' · seeded (numbers show the seed)' : ''}${anyRandom ? ' · 🎲 = partner assigned at random' : ''}</p>` +
     '<div class="pairs-grid">' + t.teams.map((x, i) =>
-      `<div class="pair-card"><span class="pair-n">${i + 1}</span><span class="pair-names">${esc(x.players[0])} &amp; ${esc(x.players[1])}</span>${x.random ? '<span class="pair-tag">🎲</span>' : ''}</div>`
+      `<div class="pair-card"><span class="pair-n">${x.seed || i + 1}</span><span class="pair-names">${esc(x.players[0])} &amp; ${esc(x.players[1])}</span>${x.random ? '<span class="pair-tag">🎲</span>' : ''}</div>`
     ).join('') + '</div>';
 }
 
@@ -1223,8 +1337,10 @@ function singlesCfg() {
 function doublesCfg() {
   const t = hasDoubles() ? state.doubles.bracket : null;
   const R = t ? t.rounds.length : 0;
+  const info = {};
+  if (t) t.teams.forEach(x => { if (x.seed) info[x.label] = { rank: x.seed }; });
   return { ev:'doubles', t, container:'dbracket-container',
-           names: t ? roundNames(R) : [], keys: t ? doublesKeys(R) : [], sched: state.doubles.schedule, W: MATCH_W_D, info: null };
+           names: t ? roundNames(R) : [], keys: t ? doublesKeys(R) : [], sched: state.doubles.schedule, W: MATCH_W_D, info: t ? info : null };
 }
 
 function renderKO(cfg) {
