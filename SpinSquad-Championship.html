@@ -23,7 +23,7 @@
 body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
 
 /* ── Header ── */
-header {å
+header {
   background: #0d1b2e; border-bottom: 1px solid var(--border);
   padding: 1.25rem 2rem; display: flex; align-items: center; justify-content: space-between;
   position: sticky; top: 0; z-index: 100;
@@ -261,6 +261,13 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .unr { color:var(--accent3); }
 .move-btn { background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:4px; font-size:10px; padding:1px 6px; margin-left:4px; cursor:pointer; }
 .move-btn:hover { color:var(--accent); border-color:var(--accent); }
+.sync-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:1rem; }
+.sync-status { font-size:12px; color:var(--muted); }
+.sync-status.ok { color:var(--accent); }
+.sync-status.busy { color:var(--accent3); }
+.sync-status.bad { color:var(--accent2); }
+.refresh-note { font-size:11px; color:var(--muted); text-align:right; margin:-6px 0 8px; min-height:14px; }
+.refresh-note.bad { color:var(--accent2); }
 .score-preview { font-size:13px; font-weight:600; min-height:18px; margin:2px 0 6px; }
 </style>
 </head>
@@ -296,6 +303,10 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 <main>
   <!-- SINGLES SETUP -->
   <div id="setup-panel">
+    <div class="sync-bar">
+      <span class="sync-status" id="sync-status-singles">Setup is shared through the Google Sheet, so every organiser sees the same list.</span>
+      <button class="btn" onclick="refreshSetup('singles')">🔄 Refresh from sheet</button>
+    </div>
     <div class="setup-grid">
       <div class="panel-card">
         <h2>🏓 Player List</h2>
@@ -329,6 +340,10 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 
   <!-- DOUBLES SETUP -->
   <div id="dsetup-panel" style="display:none">
+    <div class="sync-bar">
+      <span class="sync-status" id="sync-status-doubles">Doubles setup is shared through the Google Sheet, so every organiser sees the same pairs.</span>
+      <button class="btn" onclick="refreshSetup('doubles')">🔄 Refresh from sheet</button>
+    </div>
     <div class="setup-grid">
       <div class="panel-card">
         <h2>👥 Doubles Pairs</h2>
@@ -365,6 +380,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 
   <!-- SINGLES -->
   <div id="tournament-panel" style="display:none">
+    <div class="refresh-note" id="refresh-note"></div>
     <div class="stats-bar" id="stats-bar"></div>
     <div id="groups-view"></div>
     <div id="ko-view" style="display:none">
@@ -376,6 +392,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 
   <!-- DOUBLES -->
   <div id="dtournament-panel" style="display:none">
+    <div class="refresh-note" id="drefresh-note"></div>
     <div class="stats-bar" id="dstats-bar"></div>
     <div id="pairs-view"></div>
     <div id="dko-view" style="display:none">
@@ -456,14 +473,14 @@ const WINNER_W  = 220;
 const KO_FIRST  = 8;     // first-round matches in the singles knockout
 
 // ── Mode detection ─────────────────────────────────────────────────────
-// (no parameter) players: view everything and enter results
-// ?view           read-only
-// ?setup          organiser: setup, draws, resets, edit/clear results
-// &event=doubles  open on the doubles event
+// ?setup  organiser: setup, draws, resets and entering/editing results
+// (no parameter, or the old ?view)  view only: everyone else just follows along; the page refreshes itself
+// &event=doubles  opens on the doubles event
 const PARAMS     = new URLSearchParams(window.location.search);
-const VIEW_MODE  = PARAMS.has('view');
 const SETUP_MODE = PARAMS.has('setup');
+const VIEW_MODE  = !SETUP_MODE;
 if (VIEW_MODE) document.body.classList.add('view-mode');
+const REFRESH_SECONDS = Math.max(5, Number(PARAMS.get('refresh')) || 30);   // how often view pages re-check the sheet
 
 const $ = id => document.getElementById(id);
 function esc(s) {
@@ -478,10 +495,10 @@ function colLeft(ri, W)  { return ri * (W + COL_GAP); }
 function bracketH(first) { return slotH(0) * first - MATCH_GAP; }
 
 // ── State ──────────────────────────────────────────────────────────────
-function newDoubles() { return { nominatedText:'', looseText:'', draft:null, bracket:null, schedule:{}, seeding:'auto' }; }
-let state = { players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false, doubles:newDoubles() };
+function newDoubles() { return { nominatedText:'', looseText:'', draft:null, bracket:null, schedule:{}, seeding:'auto', setupUpdatedAt:0 }; }
+let state = { players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false, setupUpdatedAt:0, doubles:newDoubles() };
 let currentEvent = PARAMS.get('event') === 'doubles' ? 'doubles' : 'singles';
-let currentTab = null, userSwitched = false, busy = false;
+let currentTab = null, userSwitched = false, busy = false, epoch = 0;
 let doublesBackendOK = false, doublesChecked = false;
 
 function hasTournament() { return !!(state.bracket && state.bracket.groups); }
@@ -491,7 +508,7 @@ function hasEvent(ev)    { return ev === 'doubles' ? hasDoubles() : hasTournamen
 function loadLocalState() {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
-    if (s) state = Object.assign({ players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false }, JSON.parse(s));
+    if (s) state = Object.assign({ players:[], playerRanks:[], schedule:{}, bracket:null, drawn:false, setupUpdatedAt:0 }, JSON.parse(s));
   } catch(e) {}
   state.doubles = Object.assign(newDoubles(), state.doubles || {});
   normalizeState();
@@ -504,6 +521,116 @@ function normalizeState() {
   if (state.bracket && !state.bracket.groups) { state.bracket = null; state.drawn = false; }
 }
 
+// ── Shared setup (saved in the sheet so every organiser sees the same one) ──
+// The setup (player list, ladder ranks, dates, doubles pairs and seeding) travels inside the same
+// sheet cells as the draw. Each edit is time-stamped; the newer setup wins when a page loads.
+const setupDirty  = { singles:false, doubles:false };   // local edits not yet saved to the sheet
+const remoteStamp = { singles:0, doubles:0 };           // time-stamp of the setup currently in the sheet
+const remoteKnown = { singles:false, doubles:false };   // did we manage to read the sheet?
+const setupTimers = {};
+let setupQueue = Promise.resolve();
+
+function setupStamp(ev)  { return ev === 'doubles' ? (state.doubles.setupUpdatedAt || 0) : (state.setupUpdatedAt || 0); }
+function setStamp(ev, v) { if (ev === 'doubles') state.doubles.setupUpdatedAt = v; else state.setupUpdatedAt = v; }
+
+function setSyncStatus(ev, kind, text) {
+  const el = document.getElementById('sync-status-' + ev);
+  if (!el) return;
+  el.className = 'sync-status ' + kind;
+  el.textContent = text;
+}
+function nowLabel() { return new Date().toLocaleTimeString('en-NZ', { hour:'2-digit', minute:'2-digit' }); }
+
+// Call after any setup edit
+function onSetupChanged(ev) {
+  if (!SETUP_MODE) return;
+  setStamp(ev, Date.now());
+  setupDirty[ev] = true;
+  saveLocalState();
+  setSyncStatus(ev, 'busy', 'Unsaved changes…');
+  scheduleSetupSave(ev, 1000);
+}
+function scheduleSetupSave(ev, delay) {
+  clearTimeout(setupTimers[ev]);
+  setupTimers[ev] = setTimeout(() => saveSetup(ev), delay == null ? 1000 : delay);
+}
+function saveSetup(ev) {
+  setupQueue = setupQueue.then(() => doSaveSetup(ev)).catch(() => false);
+  return setupQueue;
+}
+async function doSaveSetup(ev) {
+  while (busy) await sleep(150);                 // never overlap a draw, reset or result being saved
+  busy = true; epoch++;
+  try {
+    if (ev === 'doubles' && !doublesBackendOK) {
+      setSyncStatus(ev, 'bad', 'Not saved to the sheet — doubles needs the updated code.gs (then reload this page).');
+      return false;
+    }
+    setSyncStatus(ev, 'busy', 'Saving to the sheet…');
+    const stamp = setupStamp(ev);
+    // Read-modify-write: bring in the latest draw and results first, so a page that has been open for a
+    // while can never overwrite scores entered since. Our own (newer) setup is kept because it has the later stamp.
+    await loadRemoteEvent(ev, false);
+    const ok = await saveRemoteEvent(ev);
+    if (setupStamp(ev) === stamp) setupDirty[ev] = false; else scheduleSetupSave(ev, 300);   // edited again meanwhile
+    if (ok) setSyncStatus(ev, 'ok', 'Saved to the sheet ✓ ' + nowLabel());
+    else { setSyncStatus(ev, 'bad', 'Could not reach the sheet — will retry'); scheduleSetupSave(ev, 15000); }
+    return ok;
+  } finally {
+    busy = false;
+  }
+}
+
+// Before a draw: pull the latest from the sheet. True if a newer setup arrived (so the user should look at it first).
+async function syncBeforeDraw(ev) {
+  const before = setupStamp(ev);
+  await loadRemoteEvent(ev, false);
+  return setupStamp(ev) !== before && !setupDirty[ev];
+}
+
+async function refreshSetup(ev) {
+  if (busy) { showToast('One moment…'); return; }
+  clearTimeout(setupTimers[ev]);
+  setupDirty[ev] = false;
+  setStamp(ev, 0);                                // so whatever is in the sheet counts as newer
+  showLoadingIndicator(true);
+  const ok = await loadRemoteEvent(ev, false);
+  showLoadingIndicator(false);
+  if (SETUP_MODE) { if (ev === 'doubles') fillDoublesInputs(); else fillInputsFromState(); }
+  renderAll();
+  if (ok) { setSyncStatus(ev, 'ok', 'Refreshed from the sheet ✓ ' + nowLabel()); showToast('Setup refreshed from the sheet.'); }
+  else { setSyncStatus(ev, 'bad', 'Could not read the sheet — showing what is on this device'); showToast('Could not read the sheet.'); }
+}
+
+// First load on an organiser's device: publish a setup the sheet doesn't have yet (or one that is newer than the sheet's)
+function publishLocalSetupIfNeeded() {
+  ['singles', 'doubles'].forEach(ev => {
+    if (!remoteKnown[ev]) return;
+    if (ev === 'doubles' && !doublesBackendOK) return;
+    const hasLocal = ev === 'doubles'
+      ? !!(state.doubles.nominatedText || state.doubles.looseText || state.doubles.draft)
+      : !!((state.players || []).some(Boolean) || (state.playerRanks || []).length || Object.keys(state.schedule || {}).length);
+    const local = setupStamp(ev);
+    if (local > remoteStamp[ev] || (remoteStamp[ev] === 0 && hasLocal)) {
+      if (!local) setStamp(ev, Date.now());
+      setupDirty[ev] = true;
+      saveLocalState();
+      scheduleSetupSave(ev, 300);
+    }
+  });
+}
+
+function onPlayerInput() {
+  if (!$('p1')) return;
+  state.players = [];
+  for (let i = 1; i <= 32; i++) { const v = ($('p' + i).value || '').trim(); state.players.push(v || null); }
+  onSetupChanged('singles');
+}
+function onScheduleInput() {
+  readScheduleInputs();
+  onSetupChanged('singles');
+}
+
 // ── Sync with the Google Sheet (shared by every device) ────────────────
 // Singles and doubles are stored separately, so a result in one never overwrites the other.
 function applyRemote(data, ev = 'singles') {
@@ -512,16 +639,31 @@ function applyRemote(data, ev = 'singles') {
     // An un-updated script would answer with the singles data, which must never be used here.
     if (!data || data.event !== 'doubles') return false;
     doublesBackendOK = true;
+    remoteKnown.doubles = true;
+  } else if (data && Object.prototype.hasOwnProperty.call(data, 'bracket')) {
+    remoteKnown.singles = true;
   }
+  remoteStamp[ev] = 0;
   if (!data || data.bracket === null || data.bracket === undefined) return false;
   const stored = typeof data.bracket === 'string' ? JSON.parse(data.bracket) : data.bracket;
+  const rs = stored && stored.setup;                                  // the shared setup, if any
+  remoteStamp[ev] = rs ? (rs.updatedAt || 0) : 0;
+  let adopted = false;
 
   if (ev === 'doubles') {
     let b = (stored && stored.bracket !== undefined) ? stored.bracket : null;
     if (b && !(b.rounds && b.teams)) b = null;
     state.doubles.bracket = b || null;
-    if (stored && stored.schedule) state.doubles.schedule = stored.schedule;
+    if (stored && stored.schedule && !setupDirty.doubles) state.doubles.schedule = stored.schedule;
+    if (rs && !setupDirty.doubles && remoteStamp.doubles > setupStamp('doubles')) {
+      Object.assign(state.doubles, {
+        nominatedText: rs.nominatedText || '', looseText: rs.looseText || '',
+        draft: rs.draft || null, seeding: rs.seeding || 'auto', setupUpdatedAt: remoteStamp.doubles
+      });
+      adopted = true;
+    }
     saveLocalState();
+    if (adopted && SETUP_MODE) { fillDoublesInputs(); showToast('Doubles setup updated from the sheet.'); }
     return true;
   }
 
@@ -530,24 +672,35 @@ function applyRemote(data, ev = 'singles') {
   if (b && !b.groups) b = null;               // old-format draw: ignore
   state.bracket = b || null;
   state.drawn = !!b;
-  if (stored && stored.schedule) state.schedule = stored.schedule;
+  if (stored && stored.schedule && !setupDirty.singles) state.schedule = stored.schedule;
+  if (rs && !setupDirty.singles && remoteStamp.singles > setupStamp('singles')) {
+    state.players = rs.players || [];
+    state.playerRanks = rs.playerRanks || [];
+    state.setupUpdatedAt = remoteStamp.singles;
+    adopted = true;
+  }
   saveLocalState();
+  if (adopted && SETUP_MODE) { fillInputsFromState(); showToast('Setup updated from the sheet.'); }
   return true;
 }
 
-async function loadRemoteEvent(ev, allowJsonp = true) {
-  const r = await loadRemoteEventInner(ev, allowJsonp);
+let lastGoodFetch = 0;
+async function loadRemoteEvent(ev, allowJsonp = true, guard = null) {
+  const r = await loadRemoteEventInner(ev, allowJsonp, guard);
   if (ev === 'doubles') { doublesChecked = true; updateDoublesWarning(); }
   return r;
 }
-async function loadRemoteEventInner(ev, allowJsonp) {
+async function loadRemoteEventInner(ev, allowJsonp, guard) {
   const q = ev === 'doubles' ? '&event=doubles' : '';
   try {
     const res = await fetch(SPINSQUAD_API + '?action=getTournament' + q, { method:'GET', redirect:'follow', cache:'no-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     if (!text) throw new Error('Empty response');
-    return applyRemote(JSON.parse(text), ev);
+    const data = JSON.parse(text);
+    lastGoodFetch = Date.now();
+    if (guard && !guard()) return false;       // something changed while we were waiting: don't apply a stale reply
+    return applyRemote(data, ev);
   } catch(e) {
     console.warn('Could not load remote ' + ev + ':', e.message);
     return allowJsonp ? await loadRemoteViaJsonp(ev) : false;
@@ -573,9 +726,12 @@ function loadRemoteViaJsonp(ev) {
 async function saveRemoteEvent(ev) {
   // Never write doubles unless the script is known to keep it separate (else it would overwrite singles)
   if (ev === 'doubles' && !doublesBackendOK) return false;
+  const d = state.doubles;
   const payload = ev === 'doubles'
-    ? { kind:'doubles', bracket: state.doubles.bracket, schedule: state.doubles.schedule }
-    : { bracket: state.bracket, drawn: state.drawn, schedule: state.schedule };
+    ? { kind:'doubles', bracket: d.bracket, schedule: d.schedule,
+        setup: { updatedAt: d.setupUpdatedAt || 0, nominatedText: d.nominatedText, looseText: d.looseText, draft: d.draft, seeding: d.seeding } }
+    : { bracket: state.bracket, drawn: state.drawn, schedule: state.schedule,
+        setup: { updatedAt: state.setupUpdatedAt || 0, players: state.players, playerRanks: state.playerRanks } };
   // Apps Script needs a no-cors form POST; the response can't be read, so success = no network error
   const fd = new FormData();
   fd.append('action', 'saveTournament');
@@ -598,7 +754,7 @@ function recomputeEvent(ev) { if (ev === 'doubles') recomputeDoubles(); else rec
 // Apply one change safely: pull the latest data first so other players' results aren't overwritten
 async function commitChange(mutator, okMsg, ev = 'singles') {
   if (busy) { showToast('One moment…'); return false; }
-  busy = true;
+  busy = true; epoch++;
   try {
     showLoadingIndicator(true);
     await loadRemoteEvent(ev, false);
@@ -621,7 +777,7 @@ async function commitChange(mutator, okMsg, ev = 'singles') {
 function clearPlayers() {
   for (let i = 1; i <= 32; i++) { const el = $('p' + i); if (el) el.value = ''; }
   state.players = []; state.playerRanks = [];
-  saveLocalState();
+  onSetupChanged('singles');
   showToast(hasTournament()
     ? 'Player list cleared. The current draw is unchanged — use Reset Singles Draw to remove it.'
     : 'Player list cleared.');
@@ -669,7 +825,7 @@ function savePlayers() {
       .map((name, i) => ({ name, rank: i + 1 }));
   }
   state.players = inputNames; // keep for display/backwards compat
-  saveLocalState(); showToast('Players saved!');
+  saveLocalState(); onSetupChanged('singles'); showToast('Players saved!');
 }
 
 function buildScheduleInputs() {
@@ -685,13 +841,13 @@ function buildScheduleInputs() {
   });
 }
 function fillScheduleInputs() {
-  Object.entries(state.schedule || {}).forEach(([k,v]) => { const el = $('sched_' + k); if (el) el.value = v; });
+  SCHEDULE.forEach(x => { const el = $('sched_' + x.key); if (el) el.value = (state.schedule || {})[x.key] || ''; });
 }
 function fillInputsFromState() {
-  const names = (state.players && state.players.some(Boolean))
+  const names = (state.players && state.players.length)
     ? state.players
     : (state.playerRanks || []).map(p => p.name);
-  names.forEach((p,i) => { const el = $('p' + (i+1)); if (el) el.value = p || ''; });
+  for (let i = 1; i <= 32; i++) { const el = $('p' + i); if (el) el.value = names[i - 1] || ''; }   // blank the rest too
   fillScheduleInputs();
 }
 function readScheduleInputs() {
@@ -700,8 +856,10 @@ function readScheduleInputs() {
 }
 function saveSchedule() {
   readScheduleInputs();
-  saveLocalState();
-  if (hasTournament()) { renderAll(); saveRemoteBracket(); }
+  onSetupChanged('singles');
+  clearTimeout(setupTimers.singles);
+  saveSetup('singles');                         // flush now
+  renderAll();
   showToast('Schedule saved!');
 }
 
@@ -727,7 +885,7 @@ async function fetchFromSpinSquad() {
     }
     statusEl.className = 'fetch-status ok';
     statusEl.innerHTML = `✓ <span>${players.length} players loaded from SpinSquad. Fill remaining slots manually if needed.</span>`;
-    showToast(players.length + ' players loaded!');
+    onPlayerInput(); showToast(players.length + ' players loaded!');
   } catch(err) {
     statusEl.className = 'fetch-status err';
     statusEl.innerHTML = `✕ <span>Could not reach SpinSquad API — use "Paste from Sheet" instead. (${err.message})</span>`;
@@ -790,21 +948,40 @@ function confirmImport() {
     if (el) el.value = name;
   }
   document.getElementById('import-overlay').classList.remove('open');
-  showToast(`${_importedPlayers.length} players imported!`);
+  onPlayerInput(); showToast(`${_importedPlayers.length} players imported!`);
 }
 
 // ── Singles draw: 8 groups of 4 by ladder seed ─────────────────────────
-function startDraw() {
-  if (hasTournament() && !confirm('A draw already exists. Making a new draw erases all groups, scores and results. Continue?')) return;
+async function startDraw() {
+  if (busy) { showToast('One moment…'); return; }
+  busy = true; epoch++;
+  try {
+    showLoadingIndicator(true);
+    const adopted = await syncBeforeDraw('singles');
+    showLoadingIndicator(false);
+    if (adopted) { showToast('The setup was changed on another device and has been updated here — please look it over, then press the button again.'); return; }
+    if (!makeSinglesDraw()) return;
+    showToast('Draw complete! Saving to sheet…');
+    showLoadingIndicator(true);
+    const ok = await saveRemoteBracket();
+    showToast(ok ? 'Draw saved! Players can now see the groups.' : 'Draw saved locally — sheet sync failed.');
+  } finally {
+    busy = false;
+    showLoadingIndicator(false);
+  }
+}
+
+function makeSinglesDraw() {
+  if (hasTournament() && !confirm('A draw already exists. Making a new draw erases all groups, scores and results. Continue?')) return false;
   savePlayers(); readScheduleInputs();
 
   const ranked = [...(state.playerRanks || [])]
     .filter(p => p && p.name)
     .sort((a, b) => a.rank - b.rank);          // lowest ladder rank = best = seed 1
-  if (ranked.length < 2) { showToast(hasTournament() ? 'Add at least 2 players first — the existing draw was left unchanged (use Reset Singles Draw to remove it).' : 'Add at least 2 players first.'); return; }
+  if (ranked.length < 2) { showToast(hasTournament() ? 'Add at least 2 players first — the existing draw was left unchanged (use Reset Singles Draw to remove it).' : 'Add at least 2 players first.'); return false; }
   const names = ranked.map(p => p.name);
   const dup = names.find((n, i) => names.indexOf(n) !== i);
-  if (dup) { showToast('Two players are both called "' + dup + '" — make the names unique.'); return; }
+  if (dup) { showToast('Two players are both called "' + dup + '" — make the names unique.'); return false; }
 
   const info = {};
   ranked.forEach((p, i) => { info[p.name] = { seed: i + 1, rank: p.rank < 999 ? p.rank : null }; });
@@ -836,12 +1013,7 @@ function startDraw() {
   saveLocalState();
   currentEvent = 'singles';
   switchTab('groups', true);
-  showToast('Draw complete! Saving to sheet…');
-  showLoadingIndicator(true);
-  saveRemoteBracket().then(ok => {
-    showLoadingIndicator(false);
-    showToast(ok ? 'Draw saved! Players can now see the groups.' : 'Draw saved locally — sheet sync failed.');
-  });
+  return true;
 }
 
 // ── Reset (applies to the event currently shown) ───────────────────────
@@ -860,7 +1032,7 @@ async function resetTournament() {
   const ev = currentEvent;
   const label = ev === 'doubles' ? 'doubles' : 'singles';
   if (!confirm(`Reset the ${label} draw? All ${label} scores and results will be erased. The other event is not affected.`)) return;
-  busy = true;
+  busy = true; epoch++;
   showLoadingIndicator(true);
   try {
     if (ev === 'doubles') { state.doubles.bracket = null; state.doubles.schedule = {}; }
@@ -1035,21 +1207,21 @@ function seededFirstRound(labels) {
 
 function setDoublesSeeding(v) {
   state.doubles.seeding = ['auto', 'manual', 'none'].includes(v) ? v : 'auto';
-  saveLocalState();
+  onSetupChanged('doubles');
   renderDoublesDraft();
 }
 function moveDraftPair(i, dir) {
   const d = state.doubles.draft;
   if (!d || i + dir < 0 || i + dir >= d.pairs.length) return;
   [d.pairs[i], d.pairs[i + dir]] = [d.pairs[i + dir], d.pairs[i]];
-  saveLocalState();
+  onSetupChanged('doubles');
   renderDoublesDraft();
 }
 
 function saveDoublesInputs() {
   state.doubles.nominatedText = $('d-nominated') ? $('d-nominated').value : '';
   state.doubles.looseText     = $('d-loose') ? $('d-loose').value : '';
-  saveLocalState();
+  onSetupChanged('doubles');
 }
 function fillDoublesInputs() {
   if ($('d-nominated')) $('d-nominated').value = state.doubles.nominatedText || '';
@@ -1080,6 +1252,7 @@ function pairUpDoubles() {
   const { nominated, loose, errors } = parseDoublesInputs();
   if (errors.length) {
     state.doubles.draft = null;
+    onSetupChanged('doubles');
     $('d-draft').innerHTML = '<div class="warn-box">' + errors.map(esc).join('<br>') + '</div>';
     return;
   }
@@ -1091,7 +1264,7 @@ function pairUpDoubles() {
     pairs: [...nominated.map(p => ({ a: p[0], b: p[1], random: false })), ...randomPairs].map(x => Object.assign(x, { tie: Math.random() })),
     leftover
   };
-  saveLocalState();
+  onSetupChanged('doubles');
   renderDoublesDraft();
 }
 
@@ -1141,6 +1314,12 @@ function updateDoublesWarning() {
 }
 
 async function startDoublesDraw() {
+  if (busy) { showToast('One moment…'); return; }
+  busy = true; epoch++;
+  try { await startDoublesDrawInner(); } finally { busy = false; showLoadingIndicator(false); }
+}
+
+async function startDoublesDrawInner() {
   const d = state.doubles.draft;
   if (!d || d.pairs.length < 2) { showToast('Pair up at least 2 pairs first.'); return; }
   if (d.pairs.length > MAX_PAIRS) { showToast('Doubles supports up to ' + MAX_PAIRS + ' pairs.'); return; }
@@ -1150,6 +1329,7 @@ async function startDoublesDraw() {
   const ok = await ensureDoublesBackend();
   showLoadingIndicator(false);
   if (!ok) { updateDoublesWarning(); showToast('Doubles can’t be saved yet — see the warning above.'); return; }
+  if (await syncBeforeDraw('doubles')) { showToast('The doubles setup was changed on another device and has been updated here — please look it over, then press the button again.'); return; }
 
   const mode = state.doubles.seeding || 'auto';
   const seeded = mode !== 'none';
@@ -1187,10 +1367,9 @@ async function startDoublesDraw() {
   renderDoublesScheduleBox();
   showToast('Doubles draw complete! Saving to sheet…');
   showLoadingIndicator(true);
-  saveRemoteEvent('doubles').then(saved => {
-    showLoadingIndicator(false);
-    showToast(saved ? 'Doubles draw saved! Players can now see it.' : 'Draw saved locally — sheet sync failed.');
-  });
+  const saved = await saveRemoteEvent('doubles');
+  showLoadingIndicator(false);
+  showToast(saved ? 'Doubles draw saved! Players can now see it.' : 'Draw saved locally — sheet sync failed.');
 }
 
 function renderDoublesScheduleBox() {
@@ -1482,8 +1661,7 @@ function openScore(id) {
   if (!f) return;
   const m = f.match;
   if (!m.p1 || !m.p2 || m.p1 === 'BYE' || m.p2 === 'BYE' || m.isBye) return;
-  if (m.winner && !SETUP_MODE) { showToast('Result already recorded — ask the organiser to change it.'); return; }
-  scoreCtx = { id, p1: m.p1, p2: m.p2, ev: eventOfMatch(id) };
+  scoreCtx = { id, p1: m.p1, p2: m.p2, ev: eventOfMatch(id), prev: JSON.stringify([m.s1, m.s2, m.winner]) };
   $('modal-title').textContent = 'Enter score';
   $('modal-sub').textContent = f.label + ' — games won by each side';
   const val = v => v != null ? v : 0;      // start at 0 so only the winner's games need typing
@@ -1533,7 +1711,7 @@ function saveScore() {
     if (!f) return 'Match not found.';
     const m = f.match;
     if (m.p1 !== ctx.p1 || m.p2 !== ctx.p2) return 'This match has changed — please open it again.';
-    if (m.winner && !SETUP_MODE) return 'Someone just recorded this result already.';
+    if (JSON.stringify([m.s1, m.s2, m.winner]) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
     m.s1 = a; m.s2 = b; m.winner = winner; m.rec = [m.p1, m.p2];
   }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`, ctx.ev);
 }
@@ -1546,6 +1724,7 @@ function clearResult() {
     const f = findAnyMatch(ctx.id);
     if (!f) return 'Match not found.';
     const m = f.match;
+    if (JSON.stringify([m.s1, m.s2, m.winner]) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
     m.s1 = m.s2 = m.winner = null; m.rec = null;
   }, 'Result cleared.', ctx.ev);
 }
@@ -1606,14 +1785,61 @@ function showToast(msg) {
   showToast._t = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+// ── Auto-refresh (view pages, and organisers while looking at results) ──
+let lastRefresh = { singles: 0, doubles: 0 };
+function snapshot() { return JSON.stringify([state.bracket, state.doubles.bracket, state.schedule, state.doubles.schedule]); }
+function modalOpen() { const m = $('modal-overlay'); return !!(m && m.classList.contains('open')); }
+
+function setRefreshNote() {
+  const stale = lastGoodFetch && Date.now() - lastGoodFetch > REFRESH_SECONDS * 3000;
+  const text = !lastGoodFetch ? '' : (stale
+    ? 'Can’t reach the sheet — retrying…'
+    : 'Updates automatically · last checked ' + new Date(lastGoodFetch).toLocaleTimeString('en-NZ', { hour:'2-digit', minute:'2-digit', second:'2-digit' }));
+  ['refresh-note', 'drefresh-note'].forEach(id => { const el = $(id); if (el) { el.textContent = text; el.classList.toggle('bad', !!stale); } });
+}
+
+async function autoRefresh() {
+  if (document.hidden || busy || modalOpen()) return;
+  if (SETUP_MODE && currentTab === 'setup') return;          // never touch the setup boxes while someone may be typing
+  const e0 = epoch;
+  const guard = () => !busy && epoch === e0 && !modalOpen();
+  const other = currentEvent === 'doubles' ? 'singles' : 'doubles';
+  const targets = [currentEvent];
+  if (Date.now() - lastRefresh[other] > 120000) targets.push(other);   // the other event is checked less often
+  const before = snapshot();
+  await Promise.all(targets.map(ev => loadRemoteEvent(ev, false, guard)));
+  targets.forEach(ev => { lastRefresh[ev] = Date.now(); });
+  setRefreshNote();
+  if (!guard()) return;                                       // a save or a score entry started meanwhile; try again next round
+  if (snapshot() !== before) renderAll();
+}
+
+function scheduleRefresh() {
+  const jitter = (Math.random() - 0.5) * 4000;                // spread viewers out so they don't all hit the sheet together
+  setTimeout(async () => {
+    try { await autoRefresh(); } catch (e) { console.warn('auto-refresh failed', e); }
+    scheduleRefresh();
+  }, REFRESH_SECONDS * 1000 + jitter);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && Date.now() - lastGoodFetch > 10000) autoRefresh();
+});
+
 // ── Boot ───────────────────────────────────────────────────────────────
 loadLocalState();
-if (SETUP_MODE) { buildPlayerInputs(); buildScheduleInputs(); fillInputsFromState(); fillDoublesInputs(); }
+if (SETUP_MODE) {
+  buildPlayerInputs(); buildScheduleInputs(); fillInputsFromState(); fillDoublesInputs();
+  $('players-grid').addEventListener('input', onPlayerInput);
+  $('schedule-list').addEventListener('input', onScheduleInput);
+  $('schedule-list').addEventListener('change', onScheduleInput);
+}
 switchTab(defaultTab());
 
 showLoadingIndicator(true);
 Promise.all([ loadRemoteEvent('singles'), loadRemoteEvent('doubles') ]).then(([gotSingles, gotDoubles]) => {
   showLoadingIndicator(false);
+  setRefreshNote();
+  if (SETUP_MODE) publishLocalSetupIfNeeded();
   if (!gotSingles && !gotDoubles) { updateEventSwitcher(); return; }
   if (SETUP_MODE) { fillScheduleInputs(); renderDoublesScheduleBox(); }
   if (!userSwitched) {
@@ -1624,6 +1850,8 @@ Promise.all([ loadRemoteEvent('singles'), loadRemoteEvent('doubles') ]).then(([g
   updateHeader();
   updateEventSwitcher();
 });
+
+scheduleRefresh();
 
 </script>
 </body>
