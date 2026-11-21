@@ -481,6 +481,8 @@ const SETUP_MODE = PARAMS.has('setup');
 const VIEW_MODE  = !SETUP_MODE;
 if (VIEW_MODE) document.body.classList.add('view-mode');
 const REFRESH_SECONDS = Math.max(5, Number(PARAMS.get('refresh')) || 30);   // how often view pages re-check the sheet
+let GET_TIMEOUT = 15000, POST_TIMEOUT = 20000;
+let VERIFY_DELAYS = [5000, 12000];           // re-checks after a save, to catch a result overwritten by a clashing save                                // a stalled request is abandoned after this many ms
 
 const $ = id => document.getElementById(id);
 function esc(s) {
@@ -559,7 +561,7 @@ function saveSetup(ev) {
   return setupQueue;
 }
 async function doSaveSetup(ev) {
-  while (busy) await sleep(150);                 // never overlap a draw, reset or result being saved
+  await waitIdle();                              // never overlap a draw, reset or result being saved
   busy = true; epoch++;
   try {
     if (ev === 'doubles' && !doublesBackendOK) {
@@ -589,7 +591,8 @@ async function syncBeforeDraw(ev) {
 }
 
 async function refreshSetup(ev) {
-  if (busy) { showToast('One moment…'); return; }
+  await waitIdle();
+  if (busy) { showToast('Still saving something else — try again in a moment.'); return; }
   clearTimeout(setupTimers[ev]);
   setupDirty[ev] = false;
   setStamp(ev, 0);                                // so whatever is in the sheet counts as newer
@@ -684,6 +687,27 @@ function applyRemote(data, ev = 'singles') {
   return true;
 }
 
+// A request that never answers must not be able to freeze the page: give up after a timeout
+async function fetchTextWithTimeout(url, opts, ms) {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => { if (ctl) ctl.abort(); }, ms);
+  try {
+    const res = await fetch(url, ctl ? Object.assign({}, opts, { signal: ctl.signal }) : opts);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.text();                    // the timer still covers reading the body
+  } finally { clearTimeout(timer); }
+}
+async function fetchWithTimeout(url, opts, ms) {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => { if (ctl) ctl.abort(); }, ms);
+  try { return await fetch(url, ctl ? Object.assign({}, opts, { signal: ctl.signal }) : opts); }
+  finally { clearTimeout(timer); }
+}
+async function waitIdle(maxMs = 45000) {        // wait for any save in progress instead of refusing
+  const t0 = Date.now();
+  while (busy && Date.now() - t0 < maxMs) await sleep(100);
+}
+
 let lastGoodFetch = 0;
 async function loadRemoteEvent(ev, allowJsonp = true, guard = null) {
   const r = await loadRemoteEventInner(ev, allowJsonp, guard);
@@ -693,9 +717,7 @@ async function loadRemoteEvent(ev, allowJsonp = true, guard = null) {
 async function loadRemoteEventInner(ev, allowJsonp, guard) {
   const q = ev === 'doubles' ? '&event=doubles' : '';
   try {
-    const res = await fetch(SPINSQUAD_API + '?action=getTournament' + q, { method:'GET', redirect:'follow', cache:'no-cache' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
+    const text = await fetchTextWithTimeout(SPINSQUAD_API + '?action=getTournament' + q, { method:'GET', redirect:'follow', cache:'no-cache' }, GET_TIMEOUT);
     if (!text) throw new Error('Empty response');
     const data = JSON.parse(text);
     lastGoodFetch = Date.now();
@@ -738,7 +760,7 @@ async function saveRemoteEvent(ev) {
   if (ev === 'doubles') fd.append('event', 'doubles');
   fd.append('bracket', JSON.stringify(payload));
   try {
-    await fetch(SPINSQUAD_API, { method:'POST', mode:'no-cors', body: fd });
+    await fetchWithTimeout(SPINSQUAD_API, { method:'POST', mode:'no-cors', body: fd }, POST_TIMEOUT);
     saveLocalState();
     return true;
   } catch(e) {
@@ -751,22 +773,101 @@ const saveRemoteBracket = () => saveRemoteEvent('singles');
 
 function recomputeEvent(ev) { if (ev === 'doubles') recomputeDoubles(); else recomputeKnockout(); }
 
-// Apply one change safely: pull the latest data first so other players' results aren't overwritten
-async function commitChange(mutator, okMsg, ev = 'singles') {
-  if (busy) { showToast('One moment…'); return false; }
+// Apply one change safely. Changes are queued, never refused. Each one pulls the latest data first (so other
+// people's results aren't overwritten), saves, then re-reads the sheet to confirm the change really is there.
+// Two people saving at almost the same moment can still overwrite each other (the sheet cannot lock), so the
+// change is checked again a few seconds later and put back if it was lost.
+let commitQueue = Promise.resolve();
+let pendingCommits = 0;
+const changeSeq = {};
+
+function eventSnapshot(ev) {
+  return JSON.stringify(ev === 'doubles'
+    ? { bracket: state.doubles.bracket, schedule: state.doubles.schedule }
+    : { bracket: state.bracket, schedule: state.schedule, drawn: state.drawn });
+}
+function restoreEvent(ev, snap) {
+  const o = JSON.parse(snap);
+  if (ev === 'doubles') { state.doubles.bracket = o.bracket; state.doubles.schedule = o.schedule; }
+  else { state.bracket = o.bracket; state.schedule = o.schedule; state.drawn = o.drawn; }
+  saveLocalState();
+}
+function queueJob(fn) {
+  pendingCommits++;
+  const job = commitQueue.then(fn).catch(e => { console.warn('save failed', e); return false; });
+  commitQueue = job.then(() => { pendingCommits--; });
+  return job;
+}
+
+function commitChange(mutator, okMsg, ev = 'singles', verify = null, lateKey = null) {
+  const seq = lateKey ? (changeSeq[lateKey] = (changeSeq[lateKey] || 0) + 1) : 0;
+  showToast(pendingCommits > 0 ? 'Saving… (' + (pendingCommits + 1) + ' waiting)' : 'Saving…');
+  return queueJob(() => commitChangeNow(mutator, okMsg, ev, verify, lateKey, seq))
+    .then(r => { if (r === false && !String(document.getElementById('toast').textContent).trim()) showToast('Something went wrong while saving — please check the result and try again.'); return r; });
+}
+
+async function commitChangeNow(mutator, okMsg, ev, verify, lateKey, seq) {
+  await waitIdle();
   busy = true; epoch++;
   try {
     showLoadingIndicator(true);
-    await loadRemoteEvent(ev, false);
-    if (!hasEvent(ev)) { renderAll(); showToast('The draw was reset — please reload the page.'); return false; }
-    const err = mutator();
-    if (err) { renderAll(); showToast(err); return false; }
-    recomputeEvent(ev);
-    saveLocalState();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await loadRemoteEvent(ev, false);
+      if (!hasEvent(ev)) { renderAll(); showToast('The draw was reset — please reload the page.'); return false; }
+      const backup = eventSnapshot(ev);
+      const err = mutator();
+      if (err) { renderAll(); showToast(err); return false; }
+      recomputeEvent(ev);
+      saveLocalState();
+      renderAll();
+      const sent = await saveRemoteEvent(ev);
+      if (!sent) {
+        if (!(await loadRemoteEvent(ev, false))) restoreEvent(ev, backup);   // show what the sheet holds, or undo our change
+        renderAll();
+        showToast('Could not reach the sheet — the change was NOT saved. Please try again.');
+        return false;
+      }
+      if (!verify) { showToast(okMsg); return true; }
+      const readBack = await loadRemoteEvent(ev, false);                      // confirm the sheet has it
+      if (!readBack) { showToast(okMsg + ' (could not double-check it)'); scheduleLateCheck(mutator, ev, verify, lateKey, seq, 0); return true; }
+      if (verify()) { renderAll(); showToast(okMsg); scheduleLateCheck(mutator, ev, verify, lateKey, seq, 0); return true; }
+      // not there (lost or overwritten): the sheet's data is now loaded, so apply the change once more
+    }
     renderAll();
-    const ok = await saveRemoteEvent(ev);
-    showToast(ok ? okMsg : 'Saved on this device only — could not reach the sheet.');
-    return ok;
+    showToast('Could not confirm the save — the change is NOT in the sheet. Please check the connection and enter it again.');
+    return false;
+  } finally {
+    busy = false;
+    showLoadingIndicator(false);
+  }
+}
+
+function scheduleLateCheck(mutator, ev, verify, lateKey, seq, i) {
+  if (!lateKey || i >= VERIFY_DELAYS.length) return;
+  setTimeout(() => {
+    if (changeSeq[lateKey] !== seq) return;                // that match was changed again from this device: nothing to protect
+    queueJob(() => lateCheckNow(mutator, ev, verify, lateKey, seq, i));
+  }, VERIFY_DELAYS[i]);
+}
+async function lateCheckNow(mutator, ev, verify, lateKey, seq, i) {
+  if (changeSeq[lateKey] !== seq) return false;
+  await waitIdle();
+  busy = true; epoch++;
+  try {
+    if (!(await loadRemoteEvent(ev, false)) || !hasEvent(ev)) return false;
+    if (!verify()) {
+      // A save that started before ours landed has overwritten it. Put it back, but only if the match is still as it was.
+      const err = mutator();
+      if (err) { renderAll(); return false; }              // someone changed this match meanwhile: leave their change alone
+      recomputeEvent(ev);
+      saveLocalState();
+      renderAll();
+      if (await saveRemoteEvent(ev)) showToast('A result was restored after two saves clashed.');
+    } else {
+      renderAll();
+    }
+    scheduleLateCheck(mutator, ev, verify, lateKey, seq, i + 1);
+    return true;
   } finally {
     busy = false;
     showLoadingIndicator(false);
@@ -953,7 +1054,8 @@ function confirmImport() {
 
 // ── Singles draw: 8 groups of 4 by ladder seed ─────────────────────────
 async function startDraw() {
-  if (busy) { showToast('One moment…'); return; }
+  await waitIdle();
+  if (busy) { showToast('Still saving something else — try again in a moment.'); return; }
   busy = true; epoch++;
   try {
     showLoadingIndicator(true);
@@ -1028,7 +1130,8 @@ function reloadPage(ev) {
 }
 
 async function resetTournament() {
-  if (busy) return;
+  await waitIdle();
+  if (busy) { showToast('Still saving something else — try again in a moment.'); return; }
   const ev = currentEvent;
   const label = ev === 'doubles' ? 'doubles' : 'singles';
   if (!confirm(`Reset the ${label} draw? All ${label} scores and results will be erased. The other event is not affected.`)) return;
@@ -1191,6 +1294,7 @@ function seededFirstRound(labels) {
   const order = standardOrder(S);
   const fav = [];
   for (let i = 0; i < M; i++) fav.push(order[2 * i]);        // favourite seed in each first-round match, in bracket order
+  if (M >= 2) fav.push(...fav.splice(M / 2).reverse());       // flip the bottom half: seed 1 is the first match, seed 2 the last
   [[1], [2], [3, 4], [5, 6, 7, 8], [9, 10, 11, 12, 13, 14, 15, 16]].forEach(tier => {
     const idx = fav.map((sd, i) => tier.includes(sd) ? i : -1).filter(i => i >= 0);
     const seeds = shuffle(idx.map(i => fav[i]));
@@ -1314,7 +1418,8 @@ function updateDoublesWarning() {
 }
 
 async function startDoublesDraw() {
-  if (busy) { showToast('One moment…'); return; }
+  await waitIdle();
+  if (busy) { showToast('Still saving something else — try again in a moment.'); return; }
   busy = true; epoch++;
   try { await startDoublesDrawInner(); } finally { busy = false; showLoadingIndicator(false); }
 }
@@ -1386,7 +1491,8 @@ function saveDoublesSchedule() {
   const keys = doublesKeys(state.doubles.bracket.rounds.length);
   const sched = {};
   keys.forEach(k => { const v = $('dsched_' + k)?.value; if (v) sched[k] = v; });
-  commitChange(() => { state.doubles.schedule = sched; }, 'Dates saved!', 'doubles');
+  commitChange(() => { state.doubles.schedule = sched; }, 'Dates saved!', 'doubles',
+    () => JSON.stringify(state.doubles.schedule) === JSON.stringify(sched));
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────
@@ -1713,7 +1819,8 @@ function saveScore() {
     if (m.p1 !== ctx.p1 || m.p2 !== ctx.p2) return 'This match has changed — please open it again.';
     if (JSON.stringify([m.s1, m.s2, m.winner]) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
     m.s1 = a; m.s2 = b; m.winner = winner; m.rec = [m.p1, m.p2];
-  }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`, ctx.ev);
+  }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`, ctx.ev,
+  () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === winner && f.match.s1 === a && f.match.s2 === b; }, ctx.id);
 }
 
 function clearResult() {
@@ -1726,7 +1833,8 @@ function clearResult() {
     const m = f.match;
     if (JSON.stringify([m.s1, m.s2, m.winner]) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
     m.s1 = m.s2 = m.winner = null; m.rec = null;
-  }, 'Result cleared.', ctx.ev);
+  }, 'Result cleared.', ctx.ev,
+  () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === null; }, ctx.id);
 }
 
 // ── Tabs and events ────────────────────────────────────────────────────
@@ -1787,6 +1895,7 @@ function showToast(msg) {
 
 // ── Auto-refresh (view pages, and organisers while looking at results) ──
 let lastRefresh = { singles: 0, doubles: 0 };
+let refreshing = false, refreshSlow = 1;       // refreshSlow: 1 = normal speed; grows when the sheet is slow or unreachable
 function snapshot() { return JSON.stringify([state.bracket, state.doubles.bracket, state.schedule, state.doubles.schedule]); }
 function modalOpen() { const m = $('modal-overlay'); return !!(m && m.classList.contains('open')); }
 
@@ -1799,19 +1908,27 @@ function setRefreshNote() {
 }
 
 async function autoRefresh() {
-  if (document.hidden || busy || modalOpen()) return;
+  if (refreshing || document.hidden || busy || pendingCommits > 0 || modalOpen()) return;
   if (SETUP_MODE && currentTab === 'setup') return;          // never touch the setup boxes while someone may be typing
-  const e0 = epoch;
-  const guard = () => !busy && epoch === e0 && !modalOpen();
-  const other = currentEvent === 'doubles' ? 'singles' : 'doubles';
-  const targets = [currentEvent];
-  if (Date.now() - lastRefresh[other] > 120000) targets.push(other);   // the other event is checked less often
-  const before = snapshot();
-  await Promise.all(targets.map(ev => loadRemoteEvent(ev, false, guard)));
-  targets.forEach(ev => { lastRefresh[ev] = Date.now(); });
-  setRefreshNote();
-  if (!guard()) return;                                       // a save or a score entry started meanwhile; try again next round
-  if (snapshot() !== before) renderAll();
+  refreshing = true;
+  const t0 = Date.now();
+  try {
+    const e0 = epoch;
+    const guard = () => !busy && epoch === e0 && pendingCommits === 0 && !modalOpen();
+    const other = currentEvent === 'doubles' ? 'singles' : 'doubles';
+    const targets = [currentEvent];
+    if (Date.now() - lastRefresh[other] > 120000) targets.push(other);   // the other event is checked less often
+    const before = snapshot();
+    await Promise.all(targets.map(ev => loadRemoteEvent(ev, false, guard)));
+    targets.forEach(ev => { lastRefresh[ev] = Date.now(); });
+    setRefreshNote();
+    const failed = lastGoodFetch < t0, slow = Date.now() - t0 > 5000;
+    refreshSlow = (failed || slow) ? Math.min(4, refreshSlow * 2) : 1;    // be gentler on a struggling sheet
+    if (!guard()) return;                                     // a save or a score entry started meanwhile; try again next round
+    if (snapshot() !== before) renderAll();
+  } finally {
+    refreshing = false;
+  }
 }
 
 function scheduleRefresh() {
@@ -1819,7 +1936,7 @@ function scheduleRefresh() {
   setTimeout(async () => {
     try { await autoRefresh(); } catch (e) { console.warn('auto-refresh failed', e); }
     scheduleRefresh();
-  }, REFRESH_SECONDS * 1000 + jitter);
+  }, REFRESH_SECONDS * 1000 * refreshSlow + jitter);
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && Date.now() - lastGoodFetch > 10000) autoRefresh();
