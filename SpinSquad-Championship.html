@@ -268,6 +268,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .sync-status.bad { color:var(--accent2); }
 .refresh-note { font-size:11px; color:var(--muted); text-align:right; margin:-6px 0 8px; min-height:14px; }
 .refresh-note.bad { color:var(--accent2); }
+.ko-tools { display:flex; justify-content:flex-end; margin:0 0 10px; }
 .score-preview { font-size:13px; font-weight:600; min-height:18px; margin:2px 0 6px; }
 </style>
 </head>
@@ -384,6 +385,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     <div class="stats-bar" id="stats-bar"></div>
     <div id="groups-view"></div>
     <div id="ko-view" style="display:none">
+      <div class="ko-tools"><button class="btn" id="pdf-singles" onclick="savePdf('singles')">⬇ Save PDF</button></div>
       <div class="bracket-scroll">
         <div class="bracket-container" id="bracket-container"></div>
       </div>
@@ -396,6 +398,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     <div class="stats-bar" id="dstats-bar"></div>
     <div id="pairs-view"></div>
     <div id="dko-view" style="display:none">
+      <div class="ko-tools"><button class="btn" id="pdf-doubles" onclick="savePdf('doubles')">⬇ Save PDF</button></div>
       <div class="bracket-scroll">
         <div class="bracket-container" id="dbracket-container"></div>
       </div>
@@ -708,7 +711,7 @@ async function waitIdle(maxMs = 45000) {        // wait for any save in progress
   while (busy && Date.now() - t0 < maxMs) await sleep(100);
 }
 
-let lastGoodFetch = 0;
+let lastGoodFetch = 0, fetchOk = 0;            // fetchOk counts successful reads of the sheet
 async function loadRemoteEvent(ev, allowJsonp = true, guard = null) {
   const r = await loadRemoteEventInner(ev, allowJsonp, guard);
   if (ev === 'doubles') { doublesChecked = true; updateDoublesWarning(); }
@@ -720,7 +723,7 @@ async function loadRemoteEventInner(ev, allowJsonp, guard) {
     const text = await fetchTextWithTimeout(SPINSQUAD_API + '?action=getTournament' + q, { method:'GET', redirect:'follow', cache:'no-cache' }, GET_TIMEOUT);
     if (!text) throw new Error('Empty response');
     const data = JSON.parse(text);
-    lastGoodFetch = Date.now();
+    lastGoodFetch = Date.now(); fetchOk++;
     if (guard && !guard()) return false;       // something changed while we were waiting: don't apply a stale reply
     return applyRemote(data, ev);
   } catch(e) {
@@ -1514,6 +1517,9 @@ function renderAll() {
   renderKO(doublesCfg());
   updateHeader();
   updateEventSwitcher();
+  const ps = $('pdf-singles'), pd = $('pdf-doubles');
+  if (ps) ps.style.display = hasTournament() ? '' : 'none';
+  if (pd) pd.style.display = hasDoubles() ? '' : 'none';
 }
 
 function updateHeader() {
@@ -1893,6 +1899,229 @@ function showToast(msg) {
   showToast._t = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+// ── PDF export (vector, built in — no libraries, works offline) ─────────
+const PDF_W = {"F1": [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, 556, 556, 556, 222, 556, 333, 1000, 556, 556, 333, 1000, 667, 333, 1000, 556, 611, 556, 556, 222, 222, 333, 333, 350, 556, 1000, 333, 1000, 500, 333, 944, 556, 500, 667, 278, 333, 556, 556, 556, 556, 260, 556, 333, 737, 370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 556, 537, 278, 333, 333, 365, 556, 834, 834, 834, 611, 667, 667, 667, 667, 667, 667, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611, 556, 556, 556, 556, 556, 556, 889, 500, 556, 556, 556, 556, 278, 278, 278, 278, 556, 556, 556, 556, 556, 556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500], "F2": [278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584, 556, 556, 556, 278, 556, 500, 1000, 556, 556, 333, 1000, 667, 333, 1000, 556, 611, 556, 556, 278, 278, 500, 500, 350, 556, 1000, 333, 1000, 556, 333, 944, 556, 500, 667, 278, 333, 556, 556, 556, 556, 280, 556, 333, 737, 370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 611, 556, 278, 333, 333, 365, 556, 834, 834, 834, 611, 722, 722, 722, 722, 722, 722, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611, 556, 556, 556, 556, 556, 556, 889, 556, 556, 556, 556, 556, 278, 278, 278, 278, 611, 611, 611, 611, 611, 611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556], "F3": [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, 556, 556, 556, 222, 556, 333, 1000, 556, 556, 333, 1000, 667, 333, 1000, 556, 611, 556, 556, 222, 222, 333, 333, 350, 556, 1000, 333, 1000, 500, 333, 944, 556, 500, 667, 278, 333, 556, 556, 556, 556, 260, 556, 333, 737, 370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 556, 537, 278, 333, 333, 365, 556, 834, 834, 834, 611, 667, 667, 667, 667, 667, 667, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611, 556, 556, 556, 556, 556, 556, 889, 500, 556, 556, 556, 556, 278, 278, 278, 278, 556, 556, 556, 556, 556, 556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500]};                       // Helvetica / Bold / Oblique advance widths for bytes 32–255
+const PDF_PUNCT = { '–':0x96, '—':0x97, '‘':0x91, '’':0x92, '“':0x93, '”':0x94, '…':0x85, '•':0x95, '·':0xB7, '×':0xD7,
+                    'Š':0x8A, 'š':0x9A, 'Ž':0x8E, 'ž':0x9E, 'Œ':0x8C, 'œ':0x9C, 'Ÿ':0x9F };
+const PDF_LATIN = { 'Ł':'L', 'ł':'l', 'Đ':'D', 'đ':'d', 'ı':'i', 'Ħ':'H', 'ħ':'h', 'ŋ':'n', 'Ŧ':'T', 'ŧ':'t' };   // letters with no accent to strip
+
+function pdfBytes(str) {                        // text -> single-byte WinAnsi (accents stripped when unsupported)
+  let out = '';
+  for (const ch of String(str)) {
+    const c = ch.codePointAt(0);
+    if ((c >= 32 && c <= 126) || (c >= 160 && c <= 255)) { out += String.fromCharCode(c); continue; }
+    if (PDF_PUNCT[ch]) { out += String.fromCharCode(PDF_PUNCT[ch]); continue; }
+    const base = PDF_LATIN[ch] || ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    out += (base && base.charCodeAt(0) >= 32 && base.charCodeAt(0) <= 126) ? base[0] : '?';
+  }
+  return out;
+}
+function pdfWidth(str, font, size) {
+  const t = PDF_W[font]; let w = 0;
+  for (const ch of pdfBytes(str)) { const c = ch.charCodeAt(0); w += c >= 32 ? (t[c - 32] || 556) : 0; }
+  return w * size / 1000;
+}
+// shrink a little, then truncate, so a long name never spills out of its box
+function pdfFit(str, font, size, maxW) {
+  let s = String(str), sz = size;
+  while (pdfWidth(s, font, sz) > maxW && sz > size * 0.78) sz -= size * 0.04;
+  if (pdfWidth(s, font, sz) <= maxW) return { s, sz };
+  while (s.length > 1 && pdfWidth(s + '...', font, sz) > maxW) s = s.slice(0, -1);
+  return { s: s.trimEnd() + '...', sz };
+}
+
+function makePdf(W, H, title) {
+  const ops = [];
+  const n = v => String(Math.round(v * 100) / 100);
+  const hex = h => [1, 3, 5].map(i => (parseInt(h.slice(i, i + 2), 16) / 255).toFixed(3)).join(' ');
+  const esc = s => s.replace(/([\\()])/g, '\\$1');
+  const Y = y => H - y;                         // layout uses top-left origin, PDF uses bottom-left
+  return {
+    rect(x, y, w, h, o = {}) {
+      const r = Math.min(o.r || 0, w / 2, h / 2);
+      let p = '';
+      if (o.fill) p += hex(o.fill) + ' rg ';
+      if (o.stroke) p += hex(o.stroke) + ' RG ' + n(o.lw || 0.7) + ' w ';
+      if (!r) p += `${n(x)} ${n(Y(y + h))} ${n(w)} ${n(h)} re `;
+      else {
+        const k = 0.5523 * r, x0 = x, x1 = x + w, y0 = Y(y + h), y1 = Y(y);
+        p += `${n(x0 + r)} ${n(y0)} m ${n(x1 - r)} ${n(y0)} l ${n(x1 - r + k)} ${n(y0)} ${n(x1)} ${n(y0 + r - k)} ${n(x1)} ${n(y0 + r)} c ` +
+             `${n(x1)} ${n(y1 - r)} l ${n(x1)} ${n(y1 - r + k)} ${n(x1 - r + k)} ${n(y1)} ${n(x1 - r)} ${n(y1)} c ` +
+             `${n(x0 + r)} ${n(y1)} l ${n(x0 + r - k)} ${n(y1)} ${n(x0)} ${n(y1 - r + k)} ${n(x0)} ${n(y1 - r)} c ` +
+             `${n(x0)} ${n(y0 + r)} l ${n(x0)} ${n(y0 + r - k)} ${n(x0 + r - k)} ${n(y0)} ${n(x0 + r)} ${n(y0)} c h `;
+      }
+      ops.push(p + ((o.fill && o.stroke) ? 'B' : o.fill ? 'f' : 'S'));
+    },
+    line(x1, y1, x2, y2, color, lw) {
+      ops.push(`${hex(color)} RG ${n(lw)} w ${n(x1)} ${n(Y(y1))} m ${n(x2)} ${n(Y(y2))} l S`);
+    },
+    text(str, x, y, font, size, color, align = 'left') {
+      const w = pdfWidth(str, font, size);
+      const X = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
+      ops.push(`BT /${font} ${n(size)} Tf ${hex(color)} rg ${n(X)} ${n(Y(y))} Td (${esc(pdfBytes(str))}) Tj ET`);
+    },
+    build() {
+      const content = ops.join('\n');
+      const objs = [];
+      objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+      objs[2] = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+      objs[3] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${n(W)} ${n(H)}] /Resources << /Font << /F1 4 0 R /F2 5 0 R /F3 6 0 R >> >> /Contents 7 0 R >>`;
+      objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+      objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+      objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >>';
+      objs[7] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+      objs[8] = `<< /Title (${esc(pdfBytes(title))}) /Producer (SpinSquad Championship) >>`;
+      let out = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
+      const offsets = [];
+      for (let i = 1; i <= 8; i++) { offsets[i] = out.length; out += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+      const xref = out.length;
+      out += 'xref\n0 9\n0000000000 65535 f \n';
+      for (let i = 1; i <= 8; i++) out += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+      out += `trailer\n<< /Size 9 /Root 1 0 R /Info 8 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+      const bytes = new Uint8Array(out.length);
+      for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 255;
+      return bytes;
+    }
+  };
+}
+
+// One page, bracket scaled to fit; portrait or landscape, whichever lets it be larger
+function buildKnockoutPdf(cfg, meta) {
+  const t = cfg.t, rounds = t.rounds, R = rounds.length, LAST = R - 1;
+  const dbl = cfg.ev === 'doubles';
+  const CW = dbl ? 190 : 150, ROW = 17, CH = ROW * 2, GAP = 12, CG = 34, HDR = 32, CHW = dbl ? 150 : 124;
+  const slot = ri => (CH + GAP) * Math.pow(2, ri);
+  const top  = (ri, mi) => mi * slot(ri) + (slot(ri) - CH) / 2;
+  const cy   = (ri, mi) => top(ri, mi) + CH / 2;
+  const baseH = slot(0) * rounds[0].length - GAP;
+  const bodyH = Math.max(baseH, 90), off = (bodyH - baseH) / 2;          // tiny brackets are centred
+  const cw = R * (CW + CG) + CHW, ch = HDR + bodyH;
+
+  const M = 28, HB = 58, FB = 48;
+  const fit = (W, H) => Math.min((W - 2 * M) / cw, (H - M - HB - FB) / ch, 1.25);
+  const land = fit(842, 595), port = fit(595, 842);
+  const isLand = land >= port, W = isLand ? 842 : 595, H = isLand ? 595 : 842, k = isLand ? land : port;
+  const ox = (W - cw * k) / 2, oy = M + HB;
+  const sx = v => ox + v * k, sy = v => oy + v * k;
+  const pdf = makePdf(W, H, meta.title);
+
+  const C = { ink:'#0b1b2e', mute:'#6b7686', soft:'#9aa5b8', line:'#9aa5b8', border:'#7f8ba1', win:'#dff3e8', winInk:'#0b6b4c', accent:'#0a7d5a', gold:'#a16207' };
+
+  // page header
+  pdf.text('SpinSquad Championship', M, M + 18, 'F2', 20, C.ink);
+  pdf.text(meta.title, M, M + 36, 'F1', 12, C.mute);
+  pdf.text('Results as of ' + meta.when, W - M, M + 18, 'F1', 8.5, C.mute, 'right');
+  if (meta.stats) pdf.text(meta.stats, W - M, M + 32, 'F1', 8.5, C.mute, 'right');
+  pdf.line(M, M + 46, W - M, M + 46, '#d5dbe5', 0.8);
+
+  // round headings
+  rounds.forEach((matches, ri) => {
+    const x = ri * (CW + CG) + CW / 2;
+    pdf.text(cfg.names[ri].toUpperCase(), sx(x), sy(13), 'F2', 9.5 * k, C.accent, 'center');
+    const sv = cfg.sched[cfg.keys[ri]];
+    if (sv) pdf.text(fmtWhen(sv), sx(x), sy(25), 'F1', 7.5 * k, C.mute, 'center');
+  });
+
+  // connector lines (drawn first so the cards sit on top)
+  const Yc = (ri, mi) => HDR + off + cy(ri, mi);
+  for (let ri = 0; ri < LAST; ri++) {
+    const xR = ri * (CW + CG) + CW, xL = (ri + 1) * (CW + CG), xm = (xR + xL) / 2;
+    rounds[ri + 1].forEach((nm, nmi) => {
+      const a = Yc(ri, nmi * 2), b = Yc(ri, nmi * 2 + 1), c = Yc(ri + 1, nmi), lw = 0.9 * k;
+      pdf.line(sx(xR), sy(a), sx(xm), sy(a), C.line, lw);
+      pdf.line(sx(xR), sy(b), sx(xm), sy(b), C.line, lw);
+      pdf.line(sx(xm), sy(a), sx(xm), sy(b), C.line, lw);
+      pdf.line(sx(xm), sy(c), sx(xL), sy(c), C.line, lw);
+    });
+  }
+  const champX = R * (CW + CG), fy = Yc(LAST, 0);
+  pdf.line(sx(LAST * (CW + CG) + CW), sy(fy), sx(champX), sy(fy), C.line, 0.9 * k);
+
+  // match cards
+  rounds.forEach((matches, ri) => matches.forEach((m, mi) => {
+    const x = ri * (CW + CG), y = HDR + off + top(ri, mi);
+    const bye = !!m.isBye;
+    const rows = ['p1', 'p2'].map((which, j) => {
+      const p = m[which], ref = which === 'p1' ? m.ref1 : m.ref2, sc = which === 'p1' ? m.s1 : m.s2;
+      const isBye = p === 'BYE';
+      const state = !p || isBye ? 'tbd' : m.winner === p ? 'win' : m.winner ? 'lose' : 'plain';
+      const label = isBye ? 'BYE' : p ? p : (ref ? refLabel(ref) : 'TBD');
+      const pi = cfg.info && p ? cfg.info[p] : null;
+      return { j, state, label, badge: (ri === 0 && pi && pi.rank) ? String(pi.rank) : '', score: (m.winner && sc != null && !isBye) ? String(sc) : '' };
+    });
+    pdf.rect(sx(x), sy(y), CW * k, CH * k, { fill: '#ffffff', r: 3 * k });
+    rows.forEach(r => { if (r.state === 'win') pdf.rect(sx(x) + 0.4, sy(y + r.j * ROW) + (r.j ? 0 : 0.4), CW * k - 0.8, ROW * k - 0.4, { fill: C.win }); });
+    pdf.rect(sx(x), sy(y), CW * k, CH * k, { stroke: bye ? '#d0d6e0' : C.border, lw: 0.7 * k, r: 3 * k });
+    pdf.line(sx(x), sy(y + ROW), sx(x + CW), sy(y + ROW), '#cdd4df', 0.6 * k);
+    rows.forEach(r => {
+      const base = sy(y + r.j * ROW + ROW / 2 + 3.2);
+      const font = r.state === 'win' ? 'F2' : r.state === 'tbd' ? 'F3' : 'F1';
+      const color = r.state === 'win' ? C.winInk : r.state === 'lose' ? C.soft : r.state === 'tbd' ? C.soft : C.ink;
+      let tx = x + 6;
+      if (r.badge) { pdf.text(r.badge, sx(tx), base, 'F1', 6.5 * k, C.soft); tx += 14; }
+      const maxW = (CW - (tx - x) - (r.score ? 20 : 6)) * k;
+      const f = pdfFit(r.label, font, 9.5 * k, maxW);
+      pdf.text(f.s, sx(tx), base, font, f.sz, color);
+      if (r.score) pdf.text(r.score, sx(x + CW - 7), base, 'F2', 9.5 * k, r.state === 'win' ? C.winInk : C.mute, 'right');
+    });
+  }));
+
+  // champion
+  const champ = rounds[LAST][0].winner, ok = champ && champ !== 'BYE';
+  const bx = champX + 10, bw = CHW - 12, bh = 66, by = fy - bh / 2;
+  pdf.rect(sx(bx), sy(by), bw * k, bh * k, { fill: ok ? '#fff7e0' : '#f5f7fa', stroke: ok ? '#d9a21b' : '#c5cdd9', lw: 1 * k, r: 5 * k });
+  pdf.text(dbl ? 'CHAMPIONS' : 'CHAMPION', sx(bx + bw / 2), sy(by + 16), 'F2', 8 * k, ok ? C.gold : C.soft, 'center');
+  if (ok) {
+    const parts = dbl && champ.includes(' & ') ? champ.split(' & ').map((s, i) => (i ? '& ' : '') + s) : [champ];
+    parts.forEach((line, i) => {
+      const f = pdfFit(line, 'F2', 11.5 * k, (bw - 10) * k);
+      pdf.text(f.s, sx(bx + bw / 2), sy(by + (parts.length > 1 ? 36 + i * 15 : 42)), 'F2', f.sz, C.ink, 'center');
+    });
+  } else {
+    pdf.text('to be decided', sx(bx + bw / 2), sy(by + 40), 'F3', 9 * k, C.soft, 'center');
+  }
+
+  // footer
+  pdf.line(M, H - M - 8, W - M, H - M - 8, '#d5dbe5', 0.8);
+  pdf.text(meta.note, M, H - M + 4, 'F1', 7.5, C.mute);
+  pdf.text('Green = winner', W - M, H - M + 4, 'F1', 7.5, C.mute, 'right');
+  return pdf.build();
+}
+
+function downloadPdf(bytes, filename) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent || '');
+  if (isIOS) window.open(url, '_blank');        // iPhone/iPad: opens the PDF, then use Share → Save to Files
+  else { const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function savePdf(ev) {
+  const cfg = ev === 'doubles' ? doublesCfg() : singlesCfg();
+  if (!cfg.t) { showToast('There is no draw to save yet.'); return; }
+  recomputeKnockout(); recomputeDoubles();
+  const when = new Date().toLocaleString('en-NZ', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const t = cfg.t;
+  let played = 0;
+  t.rounds.forEach(r => r.forEach(m => { if (m.winner && !m.isBye) played++; }));
+  let meta;
+  if (ev === 'doubles') {
+    const seeded = t.teams.some(x => x.seed);
+    meta = { title: 'Doubles - knockout', when, stats: t.teams.length + ' pairs  -  ' + played + ' games played',
+             note: seeded ? 'Small numbers in the first round are the pair seeds.' : 'Draw made at random.' };
+  } else {
+    let gp = 0, gt = 0;
+    t.groups.forEach(g => g.matches.forEach(m => { gt++; if (m.winner) gp++; }));
+    meta = { title: 'Singles - knockout', when, stats: 'Group games ' + gp + '/' + gt + '  -  knockout games played ' + played,
+             note: 'Small numbers in the first round are ladder ranks. Qualifiers come from the group stage.' };
+  }
+  const bytes = buildKnockoutPdf(cfg, meta);
+  const iso = new Date().toISOString().slice(0, 10);
+  const name = 'SpinSquad-Championship-' + (ev === 'doubles' ? 'Doubles' : 'Singles') + '-Knockout-' + iso + '.pdf';
+  downloadPdf(bytes, name);
+  showToast('PDF saved: ' + name);
+}
+
 // ── Auto-refresh (view pages, and organisers while looking at results) ──
 let lastRefresh = { singles: 0, doubles: 0 };
 let refreshing = false, refreshSlow = 1;       // refreshSlow: 1 = normal speed; grows when the sheet is slow or unreachable
@@ -1911,7 +2140,7 @@ async function autoRefresh() {
   if (refreshing || document.hidden || busy || pendingCommits > 0 || modalOpen()) return;
   if (SETUP_MODE && currentTab === 'setup') return;          // never touch the setup boxes while someone may be typing
   refreshing = true;
-  const t0 = Date.now();
+  const t0 = Date.now(), okBefore = fetchOk;
   try {
     const e0 = epoch;
     const guard = () => !busy && epoch === e0 && pendingCommits === 0 && !modalOpen();
@@ -1922,7 +2151,7 @@ async function autoRefresh() {
     await Promise.all(targets.map(ev => loadRemoteEvent(ev, false, guard)));
     targets.forEach(ev => { lastRefresh[ev] = Date.now(); });
     setRefreshNote();
-    const failed = lastGoodFetch < t0, slow = Date.now() - t0 > 5000;
+    const failed = (fetchOk - okBefore) < targets.length, slow = Date.now() - t0 > 5000;   // counted, not timestamp-compared
     refreshSlow = (failed || slow) ? Math.min(4, refreshSlow * 2) : 1;    // be gentler on a struggling sheet
     if (!guard()) return;                                     // a save or a score entry started meanwhile; try again next round
     if (snapshot() !== before) renderAll();
