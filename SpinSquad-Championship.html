@@ -1189,9 +1189,14 @@ async function resetTournament() {
 function computeStandings(g) {
   const st = {};
   g.players.forEach(p => { st[p.name] = { name:p.name, seed:p.seed, rank:p.rank, p:0, w:0, l:0, gf:0, ga:0 }; });
+  // Points inside games only count as a tiebreak if EVERY match in the group has game scores (fair for all)
+  const pointsOK = g.matches.length > 0 && g.matches.every(m => m.winner && m.games && m.games.length);
+  const gamePts = m => (m.games || []).reduce((t, x) => [t[0] + x[0], t[1] + x[1]], [0, 0]);
+  Object.values(st).forEach(r => { r.pd = 0; });
   g.matches.forEach(m => {
     if (!m.winner) return;
     const a = st[m.p1], b = st[m.p2];
+    if (pointsOK) { const pt = gamePts(m); a.pd += pt[0] - pt[1]; b.pd += pt[1] - pt[0]; }
     a.p++; b.p++;
     a.gf += m.s1; a.ga += m.s2; b.gf += m.s2; b.ga += m.s1;
     if (m.winner === m.p1) { a.w++; b.l++; } else { b.w++; a.l++; }
@@ -1205,14 +1210,15 @@ function computeStandings(g) {
     const cluster = rows.slice(i, j);
     if (cluster.length > 1) {
       const inCluster = new Set(cluster.map(r => r.name));
-      cluster.forEach(r => { r.h2hW = 0; r.h2hGD = 0; });
+      cluster.forEach(r => { r.h2hW = 0; r.h2hGD = 0; r.h2hPD = 0; });
       g.matches.forEach(m => {
         if (!m.winner || !inCluster.has(m.p1) || !inCluster.has(m.p2)) return;
         const a = cluster.find(r => r.name === m.p1), b = cluster.find(r => r.name === m.p2);
         a.h2hGD += m.s1 - m.s2; b.h2hGD += m.s2 - m.s1;
+        if (pointsOK) { const pt = gamePts(m); a.h2hPD += pt[0] - pt[1]; b.h2hPD += pt[1] - pt[0]; }
         (m.winner === m.p1 ? a : b).h2hW++;
       });
-      cluster.sort((x, y) => y.h2hW - x.h2hW || y.h2hGD - x.h2hGD || (y.gf - y.ga) - (x.gf - x.ga) || x.seed - y.seed);
+      cluster.sort((x, y) => y.h2hW - x.h2hW || y.h2hGD - x.h2hGD || (y.gf - y.ga) - (x.gf - x.ga) || y.h2hPD - x.h2hPD || y.pd - x.pd || x.seed - y.seed);
     }
     out.push(...cluster);
     i = j;
