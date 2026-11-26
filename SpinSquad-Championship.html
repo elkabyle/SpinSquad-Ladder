@@ -425,7 +425,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     <h3 id="modal-title">Enter score</h3>
     <p class="modal-sub" id="modal-sub"></p>
     <div id="modal-body"></div>
-    <button class="btn modal-cancel" onclick="closeModal()">Cancel</button>
+    <button class="btn modal-cancel" id="modal-cancel-btn" onclick="closeModal()">Cancel</button>
   </div>
 </div>
 
@@ -1589,7 +1589,7 @@ function renderGroupCard(g) {
     body += '<table class="st-table"><thead><tr><th>#</th><th>Player</th><th>P</th><th>W</th><th>L</th><th>+/−</th></tr></thead><tbody>' +
       rows.map((r, i) => {
         const gd = r.gf - r.ga;
-        return `<tr class="${i < 2 ? 'top2' : ''}${i < 2 && complete ? ' done' : ''}"><td>${i+1}</td><td class="pname">${esc(r.name)}${r.rank ? ` <small>#${r.rank}</small>` : ''}</td><td>${r.p}</td><td>${r.w}</td><td>${r.l}</td><td>${gd > 0 ? '+' : ''}${gd}</td></tr>`;
+        return `<tr class="${i < 2 ? 'top2' : ''}${i < 2 && complete ? ' done' : ''}"><td>${i+1}</td><td class="pname">${esc(r.name)}${r.seed ? ` <small>#${r.seed}</small>` : ''}</td><td>${r.p}</td><td>${r.w}</td><td>${r.l}</td><td>${gd > 0 ? '+' : ''}${gd}</td></tr>`;
       }).join('') + '</tbody></table>';
     if (g.players.length === 1) body += '<p class="group-note">Only one player in this group — goes straight through.</p>';
     body += g.matches.map(m => {
@@ -1798,6 +1798,7 @@ function openScore(id) {
   if (!f) return;
   const m = f.match;
   if (!m.p1 || !m.p2 || m.p1 === 'BYE' || m.p2 === 'BYE' || m.isBye) return;
+  const cb = $('modal-cancel-btn'); if (cb) cb.textContent = VIEW_MODE ? 'Close' : 'Cancel';
   if (VIEW_MODE) {                              // viewers: read-only game-by-game detail
     if (!(m.winner && m.games)) return;
     $('modal-title').textContent = 'Match score';
