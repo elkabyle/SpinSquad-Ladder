@@ -281,7 +281,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
 .sync-status.bad { color:var(--accent2); }
 .refresh-note { font-size:11px; color:var(--muted); text-align:right; margin:-6px 0 8px; min-height:14px; }
 .refresh-note.bad { color:var(--accent2); }
-.ko-tools { display:flex; justify-content:flex-end; margin:0 0 10px; }
+.ko-tools { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-start; margin:0 0 10px; }
 .score-preview { font-size:13px; font-weight:600; min-height:18px; margin:2px 0 6px; }
 </style>
 </head>
@@ -398,7 +398,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     <div class="stats-bar" id="stats-bar"></div>
     <div id="groups-view"></div>
     <div id="ko-view" style="display:none">
-      <div class="ko-tools"><button class="btn" id="pdf-singles" onclick="savePdf('singles')">⬇ Save PDF</button></div>
+      <div class="ko-tools" style="align-items:center;"><label class="bo-wrap" style="margin-right:10px;font-size:13px;color:var(--muted);">Best of <select id="bo-singles" onchange="setBestOf('singles', this.value)" style="margin-left:4px;"><option value="5">5</option><option value="7">7</option></select> games</label><button class="btn" id="pdf-singles" onclick="savePdf('singles')">⬇ Save PDF</button></div>
       <div class="bracket-scroll">
         <div class="bracket-container" id="bracket-container"></div>
       </div>
@@ -411,7 +411,7 @@ body.view-mode .player-slot.winner:hover { background: var(--winner-glow); }
     <div class="stats-bar" id="dstats-bar"></div>
     <div id="pairs-view"></div>
     <div id="dko-view" style="display:none">
-      <div class="ko-tools"><button class="btn" id="pdf-doubles" onclick="savePdf('doubles')">⬇ Save PDF</button></div>
+      <div class="ko-tools" style="align-items:center;"><label class="bo-wrap" style="margin-right:10px;font-size:13px;color:var(--muted);">Best of <select id="bo-doubles" onchange="setBestOf('doubles', this.value)" style="margin-left:4px;"><option value="5">5</option><option value="7">7</option></select> games</label><button class="btn" id="pdf-doubles" onclick="savePdf('doubles')">⬇ Save PDF</button></div>
       <div class="bracket-scroll">
         <div class="bracket-container" id="dbracket-container"></div>
       </div>
@@ -1190,15 +1190,15 @@ function computeStandings(g) {
   const st = {};
   g.players.forEach(p => { st[p.name] = { name:p.name, seed:p.seed, rank:p.rank, p:0, w:0, l:0, gf:0, ga:0 }; });
   // Points inside games only count as a tiebreak if EVERY match in the group has game scores (fair for all)
-  const pointsOK = g.matches.length > 0 && g.matches.every(m => m.winner && m.games && m.games.length);
+  const pointsOK = g.matches.length > 0 && g.matches.every(m => m.winner && (m.wo || (m.games && m.games.length)));
   const gamePts = m => (m.games || []).reduce((t, x) => [t[0] + x[0], t[1] + x[1]], [0, 0]);
   Object.values(st).forEach(r => { r.pd = 0; });
   g.matches.forEach(m => {
     if (!m.winner) return;
     const a = st[m.p1], b = st[m.p2];
-    if (pointsOK) { const pt = gamePts(m); a.pd += pt[0] - pt[1]; b.pd += pt[1] - pt[0]; }
+    if (pointsOK && !m.wo) { const pt = gamePts(m); a.pd += pt[0] - pt[1]; b.pd += pt[1] - pt[0]; }
     a.p++; b.p++;
-    a.gf += m.s1; a.ga += m.s2; b.gf += m.s2; b.ga += m.s1;
+    if (!m.wo) { a.gf += m.s1; a.ga += m.s2; b.gf += m.s2; b.ga += m.s1; }   // walkovers: a win, but no games/points difference
     if (m.winner === m.p1) { a.w++; b.l++; } else { b.w++; a.l++; }
   });
   const rows = Object.values(st).sort((x, y) => y.w - x.w || x.seed - y.seed);
@@ -1214,8 +1214,8 @@ function computeStandings(g) {
       g.matches.forEach(m => {
         if (!m.winner || !inCluster.has(m.p1) || !inCluster.has(m.p2)) return;
         const a = cluster.find(r => r.name === m.p1), b = cluster.find(r => r.name === m.p2);
-        a.h2hGD += m.s1 - m.s2; b.h2hGD += m.s2 - m.s1;
-        if (pointsOK) { const pt = gamePts(m); a.h2hPD += pt[0] - pt[1]; b.h2hPD += pt[1] - pt[0]; }
+        if (!m.wo) { a.h2hGD += m.s1 - m.s2; b.h2hGD += m.s2 - m.s1; }
+        if (pointsOK && !m.wo) { const pt = gamePts(m); a.h2hPD += pt[0] - pt[1]; b.h2hPD += pt[1] - pt[0]; }
         (m.winner === m.p1 ? a : b).h2hW++;
       });
       cluster.sort((x, y) => y.h2hW - x.h2hW || y.h2hGD - x.h2hGD || (y.gf - y.ga) - (x.gf - x.ga) || y.h2hPD - x.h2hPD || y.pd - x.pd || x.seed - y.seed);
@@ -1240,9 +1240,9 @@ function propagateRounds(rounds) {
       const other = m.p1 === 'BYE' ? m.p2 : m.p1;
       m.winner = other || null;
       m.isBye = !!other;
-      m.s1 = m.s2 = null; m.rec = null; delete m.games;
+      m.s1 = m.s2 = null; m.rec = null; delete m.games; delete m.wo;
     } else if (m.winner && (m.winner !== m.p1 && m.winner !== m.p2 || (m.rec && (m.rec[0] !== m.p1 || m.rec[1] !== m.p2)))) {
-      m.winner = null; m.s1 = m.s2 = null; m.rec = null; delete m.games;
+      m.winner = null; m.s1 = m.s2 = null; m.rec = null; delete m.games; delete m.wo;
     }
   }));
 }
@@ -1526,6 +1526,7 @@ function noDrawHtml(ev) {
 }
 
 function renderAll() {
+  syncBestOf();
   recomputeKnockout();
   recomputeDoubles();
   updateStats();
@@ -1596,7 +1597,7 @@ function renderGroupCard(g) {
       const clickable = !VIEW_MODE || !!(m.winner && m.games);
       return `<div class="gm${clickable ? ' clickable' : ''}"${clickable ? ` onclick="openScore('${m.id}')"` : ''}>
         <span class="gm-p${m.winner === m.p1 ? ' win' : ''}">${esc(m.p1)}</span>
-        <span class="gm-score${m.winner ? ' played' : ''}">${m.winner ? `${m.s1} – ${m.s2}` : 'vs'}</span>
+        <span class="gm-score${m.winner ? ' played' : ''}">${m.winner ? (m.wo ? 'W/O' : `${m.s1} – ${m.s2}`) : 'vs'}</span>
         <span class="gm-p right${m.winner === m.p2 ? ' win' : ''}">${esc(m.p2)}</span>
         ${m.winner && m.games ? `<span class="gm-games">${gamesText(m)}</span>` : ''}
       </div>`;
@@ -1636,7 +1637,7 @@ function koSlot(m, which, ri, info) {
   const label = p ? esc(p) : (ref ? refLabel(ref) : 'TBD');
   const pinfo = info && p ? info[p] : null;
   const badge = (ri === 0 && pinfo && pinfo.rank) ? `<span class="seed-badge">${pinfo.rank}</span>` : '';
-  const score = (m.winner && sc != null) ? `<span class="score">${sc}</span>` : '';
+  const score = m.wo ? (m.winner === p ? '<span class="score">W/O</span>' : '') : (m.winner && sc != null) ? `<span class="score">${sc}</span>` : '';
   return `<div class="${slotCls(m, which)}">${badge}<span class="player-name">${label}</span>${score}</div>`;
 }
 
@@ -1791,7 +1792,51 @@ function findAnyMatch(id) {
 
 const MAX_GAMES = 7;                           // best of 7 is the longest format in pro play
 function gamesText(m) { return (m.games || []).map(g => g[0] + '–' + g[1]).join(', '); }
-function matchSig(m) { return JSON.stringify([m.s1, m.s2, m.winner, m.games || null]); }
+function matchSig(m) { return JSON.stringify([m.s1, m.s2, m.winner, m.games || null, !!m.wo]); }
+
+function bracketOf(ev) { return ev === 'doubles' ? (state.doubles && state.doubles.bracket) : state.bracket; }
+function bestOfFor(ev) { const t = bracketOf(ev); return (t && t.bestOf === 7) ? 7 : 5; }
+function winsNeeded(ev) { return (bestOfFor(ev) + 1) / 2; }
+
+function setWalkover(which) {
+  if (!scoreCtx) return;
+  const ctx = scoreCtx;
+  $('modal-overlay').classList.remove('open');
+  const winner = which === 1 ? ctx.p1 : ctx.p2;
+  commitChange(() => {
+    const f = findAnyMatch(ctx.id);
+    if (!f) return 'Match not found.';
+    const m = f.match;
+    if (m.p1 !== ctx.p1 || m.p2 !== ctx.p2) return 'This match has changed — please open it again.';
+    if (matchSig(m) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
+    const n = winsNeeded(ctx.ev);
+    m.s1 = which === 1 ? n : 0; m.s2 = which === 1 ? 0 : n;
+    m.winner = winner; m.rec = [m.p1, m.p2]; m.wo = true; delete m.games;
+  }, `Walkover: ${winner} goes through`, ctx.ev,
+  () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === winner && !!f.match.wo; }, ctx.id);
+}
+
+function setBestOf(ev, val) {
+  const n = parseInt(val, 10) === 7 ? 7 : 5;
+  commitChange(() => {
+    const t = bracketOf(ev);
+    if (!t) return 'There is no draw yet.';
+    t.bestOf = n;
+    const fix = m => { if (m.wo && m.winner) { const need = (n + 1) / 2; m.s1 = m.winner === m.p1 ? need : 0; m.s2 = m.winner === m.p1 ? 0 : need; } };
+    (t.groups || []).forEach(g => g.matches.forEach(fix));
+    (t.rounds || []).forEach(r => r.forEach(fix));
+  }, `Matches are now best of ${n}`, ev, () => bestOfFor(ev) === n, null);
+}
+
+function syncBestOf() {
+  ['singles', 'doubles'].forEach(ev => {
+    const el = $('bo-' + ev); if (!el) return;
+    const t = bracketOf(ev);
+    el.value = String(bestOfFor(ev));
+    el.disabled = !t;
+    el.parentNode.style.display = SETUP_MODE ? '' : 'none';
+  });
+}
 
 function openScore(id) {
   const f = findAnyMatch(id);
@@ -1832,6 +1877,9 @@ function openScore(id) {
     <p class="score-preview" id="score-preview"></p>
     <p class="score-hint" id="score-hint">Type the games each side won — an empty box counts as 0. Or fill in the points of each game and the games won are worked out for you.</p>
     <button class="btn btn-primary" style="width:100%;padding:12px;margin-top:6px;" onclick="saveScore()">Save result</button>
+    <p class="score-hint" style="margin-top:12px;">${m.wo ? 'This match is recorded as a <b>walkover</b>. ' : ''}Opponent didn’t play? Walkover = a win scored ${winsNeeded(scoreCtx.ev)}–0 (best of ${bestOfFor(scoreCtx.ev)}), not counted in games or points difference.</p>
+    <div style="display:flex;gap:8px;"><button class="btn" style="flex:1;" onclick="setWalkover(1)">Walkover: ${esc(m.p1)} wins</button>
+      <button class="btn" style="flex:1;" onclick="setWalkover(2)">Walkover: ${esc(m.p2)} wins</button></div>
     ${m.winner && SETUP_MODE ? `<button class="btn btn-danger" style="width:100%;margin-top:8px;" onclick="clearResult()">✕ Clear result</button>` : ''}`;
   $('modal-overlay').classList.add('open');
   updateScorePreview();
@@ -1880,7 +1928,8 @@ function updateScorePreview() {
   if (isNaN(a) || isNaN(b) || a < 0 || b < 0) { el.style.color = 'var(--accent2)'; el.textContent = 'Enter whole numbers, 0 or more.'; return; }
   if (a === b) { el.style.color = 'var(--muted)'; el.textContent = 'Enter the games won — the scores can’t be level.'; return; }
   el.style.color = 'var(--accent)';
-  el.textContent = '→ ' + (a > b ? scoreCtx.p1 : scoreCtx.p2) + ' wins ' + Math.max(a, b) + '–' + Math.min(a, b);
+  el.textContent = '→ ' + (a > b ? scoreCtx.p1 : scoreCtx.p2) + ' wins ' + Math.max(a, b) + '–' + Math.min(a, b)
+    + (Math.max(a, b) !== winsNeeded(scoreCtx.ev) ? ` (best of ${bestOfFor(scoreCtx.ev)}: the winner normally has ${winsNeeded(scoreCtx.ev)} games)` : '');
 }
 
 function saveScore() {
@@ -1904,8 +1953,9 @@ function saveScore() {
     if (matchSig(m) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
     m.s1 = a; m.s2 = b; m.winner = winner; m.rec = [m.p1, m.p2];
     if (games) m.games = games; else delete m.games;
+    delete m.wo;
   }, `${winner} won ${Math.max(a, b)}–${Math.min(a, b)}`, ctx.ev,
-  () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === winner && f.match.s1 === a && f.match.s2 === b && JSON.stringify(f.match.games || null) === gj; }, ctx.id);
+  () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === winner && f.match.s1 === a && f.match.s2 === b && !f.match.wo && JSON.stringify(f.match.games || null) === gj; }, ctx.id);
 }
 
 function clearResult() {
@@ -1917,7 +1967,7 @@ function clearResult() {
     if (!f) return 'Match not found.';
     const m = f.match;
     if (matchSig(m) !== ctx.prev) return 'This result was changed on another device — please open the match again.';
-    m.s1 = m.s2 = m.winner = null; m.rec = null; delete m.games;
+    m.s1 = m.s2 = m.winner = null; m.rec = null; delete m.games; delete m.wo;
   }, 'Result cleared.', ctx.ev,
   () => { const f = findAnyMatch(ctx.id); return !!f && f.match.winner === null; }, ctx.id);
 }
@@ -2126,7 +2176,7 @@ function buildKnockoutPdf(cfg, meta) {
       const state = !p || isBye ? 'tbd' : m.winner === p ? 'win' : m.winner ? 'lose' : 'plain';
       const label = isBye ? 'BYE' : p ? p : (ref ? refLabel(ref) : 'TBD');
       const pi = cfg.info && p ? cfg.info[p] : null;
-      return { j, state, label, badge: (ri === 0 && pi && pi.rank) ? String(pi.rank) : '', score: (m.winner && sc != null && !isBye) ? String(sc) : '' };
+      return { j, state, label, badge: (ri === 0 && pi && pi.rank) ? String(pi.rank) : '', score: m.wo ? (m.winner === p ? 'W/O' : '') : ((m.winner && sc != null && !isBye) ? String(sc) : '') };
     });
     pdf.rect(sx(x), sy(y), CW * k, CH * k, { fill: '#ffffff', r: 3 * k });
     rows.forEach(r => { if (r.state === 'win') pdf.rect(sx(x) + 0.4, sy(y + r.j * ROW) + (r.j ? 0 : 0.4), CW * k - 0.8, ROW * k - 0.4, { fill: C.win }); });
@@ -2168,11 +2218,29 @@ function buildKnockoutPdf(cfg, meta) {
 }
 
 function downloadPdf(bytes, filename) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent || '');
-  if (isIOS) window.open(url, '_blank');        // iPhone/iPad: opens the PDF, then use Share → Save to Files
-  else { const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); }
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+  const ua = navigator.userAgent || '';
+  // iPadOS pretends to be a Mac, so also look for a touch screen
+  const isIOS = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const openTab = () => {                         // fallback: show the PDF in a new tab (then Share → Save to Files)
+    const w = window.open(url, '_blank');
+    if (!w) { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); }
+  };
+  if (isIOS) {
+    try {                                         // best on iPad/iPhone: the share sheet (Save to Files, AirDrop, Print…)
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: filename }).catch(e => { if (!e || e.name !== 'AbortError') openTab(); });
+        return 'share';
+      }
+    } catch (e) { /* fall through */ }
+    openTab();
+    return 'tab';
+  }
+  const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  return 'download';
 }
 
 function savePdf(ev) {
@@ -2192,13 +2260,14 @@ function savePdf(ev) {
     let gp = 0, gt = 0;
     t.groups.forEach(g => g.matches.forEach(m => { gt++; if (m.winner) gp++; }));
     meta = { title: 'Singles - knockout', when, stats: 'Group games ' + gp + '/' + gt + '  -  knockout games played ' + played,
-             note: 'Small numbers in the first round are ladder ranks. Qualifiers come from the group stage.' };
+             note: 'Small numbers in the first round are seeds. Qualifiers come from the group stage.' };
   }
   const bytes = buildKnockoutPdf(cfg, meta);
   const iso = new Date().toISOString().slice(0, 10);
   const name = 'SpinSquad-Championship-' + (ev === 'doubles' ? 'Doubles' : 'Singles') + '-Knockout-' + iso + '.pdf';
-  downloadPdf(bytes, name);
-  showToast('PDF saved: ' + name);
+  const how = downloadPdf(bytes, name);
+  if (how === 'download') showToast('PDF saved: ' + name);
+  else if (how === 'tab') showToast('PDF opened — use Share → Save to Files');
 }
 
 // ── Auto-refresh (view pages, and organisers while looking at results) ──
